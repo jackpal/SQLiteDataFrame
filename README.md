@@ -66,3 +66,7 @@ struct to read the contents of a SQLite prepared statement into a DataFrame.
 ## Limitations
 
 - DataFrames do not support the concept of non-nullable types. Non-nullable sqlite columns will be represented in the DataFrame using nullable columns.
+
+## ToDo
+
+- Add helper methods for DataFrame-based CREATE TABLE, INSERT, UPDATE and DELETE.
