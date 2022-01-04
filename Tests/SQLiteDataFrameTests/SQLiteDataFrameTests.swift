@@ -92,5 +92,30 @@ final class SQLiteDataFrameTests: XCTestCase {
     XCTAssertEqual(dataFrame.columns.count,1)
     XCTAssertEqual(dataFrame.rows.count,3)
   }
+  
+  func testReadTableFromDBFile() throws {
+    let fileURL = URL(fileURLWithPath: "temp.db")
+    defer { try? FileManager.default.removeItem(at: fileURL) }
+    var db: OpaquePointer!
+    try _ = fileURL.withUnsafeFileSystemRepresentation {
+      try check(sqlite3_open($0, &db))
+    }
+    try check(sqlite3_exec(db, """
+      create table tasks (
+        description text not null,
+        done bool default false not null
+      );
+      insert into tasks (description) values ('Walk dog');
+      insert into tasks (description) values ('Drink milk');
+      insert into tasks (description) values ('Write code');
+ """, nil, nil, nil))
+    sqlite3_close(db)
+    
+    // Read the table into a data frame
+    let dataFrame = try DataFrame(contentsOfSQLiteDatabaseFile:fileURL, table:"tasks")
+    print(dataFrame)
+    
+
+  }
 
 }

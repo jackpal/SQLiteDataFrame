@@ -50,7 +50,59 @@ public enum SQLiteType {
 
 public extension DataFrame {
   /**
-   Intializes a DataFrame from a given SQLite statement.
+   Intializes a DataFrame from a given SQLite database file and table name.
+   
+   - Parameter contentsOfSQLiteDatabaseFile: The sqlite3 database file.
+   - Parameter table: The sql table to read.
+   - Parameter columns: An optional array of column names; Set to nil to use every column in the statement.
+     For this particular initializer it is an error to specify column names that are not present in the table.
+   - Parameter types; An optional dictionary of column names to `SQLiteType`s. The data frame infers the types for column names that aren’t in the dictionary.
+   - Parameter capacity: The initial capacity of each column. It is normally fine to leave this as the default value.
+   
+   Columns in the columns parameter are used to create an internal SELECT statement. Columns
+   which are not present in the table will cause an error.
+   
+   Columns in the types dictionary which are not present in the table will be ignored.
+   
+   Example:
+   ```
+   // Error checking omitted for brevity.
+   
+   // Create a test database file.
+   var db: OpaquePointer!
+   _ = sqlite3_open("temp.db", &db)
+   try check(sqlite3_exec(db, """
+     create table tasks (
+       description text not null,
+       done bool default false not null
+     );
+     insert into tasks (description) values ('Walk dog');
+     insert into tasks (description) values ('Drink milk');
+     insert into tasks (description) values ('Write code');
+""", nil, nil, nil))
+   sqlite3_close(db)
+   
+   // Read the table into a data frame
+   let dataFrame = try DataFrame(contentsOfSQLiteDatabaseFile:URL.fileURL(withPath:"temp.db"), table:"tasks")
+   ```
+   
+   The DataFrame's column types are determined by the columns' declared types, using a modified version of the
+   SQLite3 [Type Affinity](https://www.sqlite.org/datatype3.html) rules.
+   If the column's type can't be determined, then the `.any` type is used.
+   */
+  init(contentsOfSQLiteDatabaseFile sqliteDatabaseFile: URL, table: String, columns: [String]? = nil,
+       types: [String:SQLiteType]? = nil, capacity: Int = 0) throws {
+    var db: OpaquePointer!
+    _ = try sqliteDatabaseFile.withUnsafeFileSystemRepresentation{
+      try check(sqlite3_open($0, &db))
+    }
+    defer { sqlite3_close(db) }
+
+    try self.init(connection:db, table:table, columns:columns, types:types, capacity:capacity)
+  }
+  
+  /**
+   Intializes a DataFrame from a given SQLite table name.
    
    - Parameter connection: The sqlite3 database connection.
    - Parameter table: The sql table to read.
@@ -81,7 +133,7 @@ public extension DataFrame {
      insert into tasks (description) values ('Write code');
 """, nil, nil, nil))
    
-   let dataFrame = try DataFrame(connection: db, statement:"select * from tasks order by rowid;")
+   let dataFrame = try DataFrame(connection: db, table:"tasks")
    ```
    
    The DataFrame's column types are determined by the columns' declared types, using a modified version of the
