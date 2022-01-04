@@ -45,11 +45,12 @@ struct to read the contents of a SQLite prepared statement into a DataFrame.
 
 ## Features
 
-- Works with low-level sqlite3 API, should be compatible with any sqlite library.
+- Uses with the low level Sqlite3 API. Should be compatible with any sqlite wrapper library.
 - Works with:
-  - A whole table specified by name.
-  - A SELECT statement specified as a String.
-  - A prepared sqlite3 statement.
+  - A whole table specified by database file and table name.
+  - A whole table specified by database connection and name.
+  - A SELECT statement specified by database connection and String.
+  - A select statement specified by a prepared sqlite3 statement.
 - Automatically determines the column types based on the SQLite column declarations.
   - Recognizes the standard SQL column types using the [Affinity Rules](https://www.sqlite.org/datatype3.html):
     - Int
