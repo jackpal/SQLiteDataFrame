@@ -15,7 +15,8 @@ struct to read the contents of a SQLite prepared statement into a DataFrame.
    try check(sqlite3_exec(db, """
      create table tasks (
        description text not null,
-       done bool default false not null
+       done bool default false not null,
+       date DATE default CURRENT_TIMESTAMP not null
      );
      insert into tasks (description) values ('Walk dog');
      insert into tasks (description) values ('Drink milk');
@@ -27,6 +28,17 @@ struct to read the contents of a SQLite prepared statement into a DataFrame.
    
    let dataFrame = try DataFrame(statement:statement)
    print(dataFrame)
+   
+   // Prints:
+   //   ┏━━━┳━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+   //   ┃   ┃ rowid ┃ description ┃ done   ┃ date                      ┃
+   //   ┃   ┃ <Int> ┃ <String>    ┃ <Bool> ┃ <Date>                    ┃
+   //   ┡━━━╇━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+   //   │ 0 │     1 │ Walk dog    │ false  │ 2022-01-04 15:30:12 +0000 │
+   //   │ 1 │     2 │ Drink milk  │ false  │ 2022-01-04 15:30:12 +0000 │
+   //   │ 2 │     3 │ Write code  │ false  │ 2022-01-04 15:30:12 +0000 │
+   //   └───┴───────┴─────────────┴────────┴───────────────────────────┘
+
 ```
 
 ## Features
