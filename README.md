@@ -9,6 +9,7 @@ struct to read the contents of a SQLite prepared statement into a DataFrame.
 ```swift
    // Error checking omitted for brevity.
    
+   // Create some SQL data.
    var db: OpaquePointer!
    _ = sqlite3_open(":memory:", &db)
    defer { sqlite3_close(db) }
@@ -22,11 +23,12 @@ struct to read the contents of a SQLite prepared statement into a DataFrame.
      insert into tasks (description) values ('Drink milk');
      insert into tasks (description) values ('Write code');
 """, nil, nil, nil))
-   var statement: OpaquePointer!
-   _ = sqlite3_prepare_v2(db,
-       "select rowid, description, done from tasks order by rowid;",-1,&statement,nil)
+
+   // Create a DataFrame from the results of the select statement.
    
-   let dataFrame = try DataFrame(statement:statement)
+   let dataFrame = try DataFrame(connection: db, statement:"select rowid, description, done, date from tasks order by rowid;")
+   
+   // Print the dataFrame, just for fun
    print(dataFrame)
    
    // Prints:
@@ -43,12 +45,12 @@ struct to read the contents of a SQLite prepared statement into a DataFrame.
 
 ## Features
 
-- Follows DataFrame conventions.
+- Works with low-level sqlite3 API, should be compatible with any sqlite library.
 - Works with:
-  - Whole tables
-  - SELECT statements.
-  - Prepared statements.
-- Automatically determins column types based on the SQLite column declarations.
+  - A whole table specified by name.
+  - A SELECT statement specified as a String.
+  - A prepared sqlite3 statement.
+- Automatically determines the column types based on the SQLite column declarations.
   - Recognizes the standard SQL column types using the [Affinity Rules](https://www.sqlite.org/datatype3.html):
     - Int
     - Double
@@ -59,3 +61,7 @@ struct to read the contents of a SQLite prepared statement into a DataFrame.
     - Date
   - Columns whose types can't be determined are given type Any
   - You can manually override the default types by using the "types:" parameter.
+
+## Limitations
+
+- DataFrames do not support the concept of non-nullable types. Non-nullable sqlite columns will be represented in the DataFrame using nullable columns.
