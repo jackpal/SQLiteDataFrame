@@ -19,6 +19,25 @@ public enum SQLiteValue {
   case real(Double)
   case text(String)
   case blob(Data)
+  
+  init(statement:OpaquePointer, columnIndex: Int32) {
+    let columnType = sqlite3_column_type(statement, columnIndex)
+    switch columnType {
+    case SQLITE_NULL:
+      self = .null
+    case SQLITE_INTEGER:
+      self = .int(sqlite3_column_int64(statement, columnIndex))
+    case SQLITE_FLOAT:
+      self = .real(sqlite3_column_double(statement, columnIndex))
+    case SQLITE_TEXT:
+      self = .text(String(cString:sqlite3_column_text(statement, columnIndex)))
+    case SQLITE_BLOB:
+      self = .blob(Data(bytes:sqlite3_column_blob(statement, columnIndex),
+                  count:Int(sqlite3_column_bytes(statement, columnIndex))))
+    default:
+      fatalError("Unknown column type \(columnType) at columnIndex \(columnIndex)")
+    }
+  }
 }
 
 /// A protocol that can convert a value to a SQLiteValue.
@@ -31,8 +50,21 @@ public protocol SQLiteDecodable {
   init?(sqliteValue: SQLiteValue)
 }
 
-public protocol SQLiteCodable : SQLiteEncodable, SQLiteDecodable {
+// https://stackoverflow.com/questions/45234233/why-cant-i-pass-a-protocol-type-to-a-generic-t-type-parameter
+
+extension SQLiteDecodable {
+
+  static func decodeSQL(sqliteValue: SQLiteValue) -> SQLiteDecodable? {
+    decodeSQLHelper(serviceType: self, sqliteValue: sqliteValue)
+  }
   
+  static func decodeSQLHelper<T>(serviceType: T.Type, sqliteValue: SQLiteValue) -> SQLiteDecodable? where T: SQLiteDecodable {
+    return T(sqliteValue: sqliteValue)
+  }
+
+}
+
+public protocol SQLiteCodable : SQLiteEncodable, SQLiteDecodable {
 }
 
 /// An enhanced version of the SQLite column type.
@@ -309,6 +341,28 @@ public extension DataFrame {
       }
     }
     self.init(columns: columns)
+    try readSQL(statement: statement)
+  }
+
+  mutating func readSQL(connection: OpaquePointer, table: String) throws {
+    let columnText = columns.map(\.name).joined(separator: ",")
+    let statement = "SELECT \(columnText) FROM \(table);"
+    try readSQL(connection: connection, statement: statement)
+  }
+
+  mutating func readSQL(connection: OpaquePointer, statement: String) throws {
+    var preparedStatement: OpaquePointer!
+    try check(sqlite3_prepare_v2(connection, statement,-1,&preparedStatement,nil))
+    try readSQL(statement: preparedStatement)
+  }
+  
+  mutating func readSQL(statement: OpaquePointer, finalizeStatement: Bool = true) throws {
+    defer {
+      if finalizeStatement {
+        sqlite3_finalize(statement)
+      }
+    }
+    
     var rowIndex = 0
     while true {
       let rc = sqlite3_step(statement)
@@ -320,60 +374,90 @@ public extension DataFrame {
                                                            "row": NSNumber(value: rowIndex)])
       }
       self.appendEmptyRow()
-      chosenColumnIndeciesAndTypes.enumerated().forEach {(col, arg1) in
-        let (columnIndex, columnType) = arg1
-        let type = sqlite3_column_type(statement, columnIndex)
-        if type != SQLITE_NULL {
-          switch columnType {
-          case .bool:
-            rows[rowIndex][col] = sqlite3_column_int64(statement, columnIndex) != 0
-          case .int:
-            rows[rowIndex][col] = Int(sqlite3_column_int64(statement, columnIndex))
-
-          case .float:
-            rows[rowIndex][col] = sqlite3_column_double(statement, columnIndex)
-          case .text:
-            rows[rowIndex][col] = String(cString:sqlite3_column_text(statement, columnIndex))
-          case .blob:
+      for (col, column) in columns.enumerated() {
+        let columnIndex = Int32(col)
+        // Checking for SQLiteDecodable conformance before the nil check lets us have columns
+        // that decode null as a value.
+        if case let sqliteDecodableType as SQLiteDecodable.Type = column.wrappedElementType {
+          let sqlValue = SQLiteValue(statement:statement, columnIndex: columnIndex)
+          rows[rowIndex][col] = sqliteDecodableType.decodeSQL(sqliteValue: sqlValue)
+          continue
+        }
+        let sqlColumnType = sqlite3_column_type(statement, columnIndex)
+        if sqlColumnType == SQLITE_NULL {
+          continue
+        }
+        switch column.wrappedElementType {
+        case is Bool.Type:
+          rows[rowIndex][col] = sqlite3_column_int64(statement, columnIndex) != 0
+        case is Int8.Type:
+          rows[rowIndex][col] = Int8(sqlite3_column_int64(statement, columnIndex))
+        case is Int16.Type:
+          rows[rowIndex][col] = Int16(sqlite3_column_int64(statement, columnIndex))
+        case is Int32.Type:
+          rows[rowIndex][col] = Int32(sqlite3_column_int64(statement, columnIndex))
+        case is Int64.Type:
+          rows[rowIndex][col] = sqlite3_column_int64(statement, columnIndex)
+        case is Int.Type:
+          rows[rowIndex][col] = Int(sqlite3_column_int64(statement, columnIndex))
+        case is UInt8.Type:
+          rows[rowIndex][col] = UInt8(sqlite3_column_int64(statement, columnIndex))
+        case is UInt16.Type:
+          rows[rowIndex][col] = UInt16(sqlite3_column_int64(statement, columnIndex))
+        case is UInt32.Type:
+          rows[rowIndex][col] = UInt32(sqlite3_column_int64(statement, columnIndex))
+        case is UInt64.Type:
+          if sqlColumnType == SQLITE_TEXT {
+            // This decodes text representation in case its > Int64.max
+            rows[rowIndex][col] = UInt64(String(cString:sqlite3_column_text(statement, columnIndex))          )
+          } else {
+            rows[rowIndex][col] = UInt64(sqlite3_column_int64(statement, columnIndex))
+          }
+        case is UInt.Type:
+          rows[rowIndex][col] = UInt(sqlite3_column_int64(statement, columnIndex))
+        case is String.Type:
+          rows[rowIndex][col] = String(cString:sqlite3_column_text(statement, columnIndex))
+        case is Float.Type:
+            rows[rowIndex][col] = Float(sqlite3_column_double(statement, columnIndex))
+        case is Double.Type:
+            rows[rowIndex][col] = Double(sqlite3_column_double(statement, columnIndex))
+        case is Data.Type:
             rows[rowIndex][col] = Data(bytes:sqlite3_column_blob(statement, columnIndex),
                                            count:Int(sqlite3_column_bytes(statement, columnIndex)))
-          case .date:
+        case is Date.Type:
             // See "Date and Time Datatype" https://www.sqlite.org/datatype3.html
             // TEXT as ISO8601 strings ("YYYY-MM-DD HH:MM:SS.SSS").
             // REAL as Julian day numbers, the number of days since noon in Greenwich on November 24, 4714 B.C. according
             // to the proleptic Gregorian calendar.
             // INTEGER as Unix Time, the number of seconds since 1970-01-01 00:00:00 UTC.
-            switch type {
-            case SQLITE_TEXT:
-              let formatter = DateFormatter()
-              formatter.dateFormat = "yyyy-MM-dd HH:mm:ss" //this is the sqlite's format
-              rows[rowIndex][col] = formatter.date(from:String(cString:sqlite3_column_text(statement, columnIndex)))
-            case SQLITE_INTEGER:
-              rows[rowIndex][col] = Date(timeIntervalSince1970:
-                                                TimeInterval(sqlite3_column_int64(statement, columnIndex)))
-            case SQLITE_FLOAT:
-              let SECONDS_PER_DAY = 86400.0
-              let JULIAN_DAY_OF_ZERO_UNIX_TIME = 2440587.5
-              let julianDay = sqlite3_column_double(statement, columnIndex)
-              let unixTime = (julianDay - JULIAN_DAY_OF_ZERO_UNIX_TIME) * SECONDS_PER_DAY
-              self.rows[rowIndex][col] = Date(timeIntervalSince1970:TimeInterval(unixTime))
-            default:
+          switch SQLiteValue(statement:statement, columnIndex: columnIndex) {
+          case let .text(s):
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyy-MM-dd HH:mm:ss" //this is the sqlite's format
+            rows[rowIndex][col] = formatter.date(from:s)
+          case let .int(i):
+            rows[rowIndex][col] = Date(timeIntervalSince1970:TimeInterval(i))
+          case let .real(julianDay):
+            let SECONDS_PER_DAY = 86400.0
+            let JULIAN_DAY_OF_ZERO_UNIX_TIME = 2440587.5
+            let unixTime = (julianDay - JULIAN_DAY_OF_ZERO_UNIX_TIME) * SECONDS_PER_DAY
+            self.rows[rowIndex][col] = Date(timeIntervalSince1970:TimeInterval(unixTime))
+          default:
+            break
+          }
+        default:
+          if column.wrappedElementType == Any.self {
+            switch SQLiteValue(statement:statement, columnIndex: columnIndex) {
+            case .null:
               break
-            }
-
-          case .any:
-            switch type {
-            case SQLITE_INTEGER:
-              self.rows[rowIndex][col] = Int(sqlite3_column_int64(statement, columnIndex))
-            case SQLITE_FLOAT:
-              self.rows[rowIndex][col] = sqlite3_column_double(statement, columnIndex)
-            case SQLITE_TEXT:
-              self.rows[rowIndex][col] = String(cString:sqlite3_column_text(statement, columnIndex))
-            case SQLITE_BLOB:
-              self.rows[rowIndex][col] = Data(bytes:sqlite3_column_blob(statement, columnIndex),
-                                             count:Int(sqlite3_column_bytes(statement, columnIndex)))
-            default:
-              fatalError("Row {rowIndex} Column {i} Unknown type {type}")
+            case let .int(i):
+                self.rows[rowIndex][col] = i
+            case let .real(d):
+                self.rows[rowIndex][col] = d
+            case let .text(s):
+                self.rows[rowIndex][col] = s
+            case let .blob(d):
+              self.rows[rowIndex][col] = d
             }
           }
         }

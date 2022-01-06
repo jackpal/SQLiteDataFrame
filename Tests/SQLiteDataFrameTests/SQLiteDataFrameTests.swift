@@ -152,13 +152,60 @@ final class SQLiteDataFrameTests: XCTestCase {
     print(newTable)
     XCTAssertEqual(newTable.shape.rows, 4)
   }
+  
+  func testReadSQLTable() throws {
+    var d = DataFrame(columns: [
+      Column<String>(name:"description", capacity:0).eraseToAnyColumn(),
+      Column<Bool>(name:"done", capacity:0).eraseToAnyColumn(),
+      Column<Int8>(name:"byte", capacity:0).eraseToAnyColumn(),
+      Column<CGPoint>(name:"points", capacity:0).eraseToAnyColumn(),
+      Column<IntThing>(name:"thing", capacity:0).eraseToAnyColumn()
+    ])
+    d.append(row: "Pick up drycleaning", false, Int8(3), CGPoint(x: 1.0, y: 1.0), IntThing(a: 1))
+    d.append(row: "Rake leaves", false, Int8(3), CGPoint(x: 2.0, y: 2.0), IntThing(a: 2))
+    try d.writeSQL(connection:db, table: "newTable")
+    var d2 = DataFrame(columns: [
+      Column<String>(name:"description", capacity:0).eraseToAnyColumn(),
+      Column<Bool>(name:"done", capacity:0).eraseToAnyColumn(),
+      Column<Int8>(name:"byte", capacity:0).eraseToAnyColumn(),
+      Column<CGPoint>(name:"points", capacity:0).eraseToAnyColumn(),
+      Column<IntThing>(name:"thing", capacity:0).eraseToAnyColumn()
+    ])
+    try d2.readSQL(connection:db, table:"newTable")
+    XCTAssertEqual(d.shape.rows, d2.shape.rows)
+    XCTAssertEqual(d.shape.columns, d2.shape.columns)
+    XCTAssertEqual(d, d2)
+    print(d2)
+  }
+  
+  func testCasting() {
+    
+    let anyType: Any.Type = IntThing.self
+    if case let sqliteDecodableType as SQLiteDecodable.Type = anyType {
+      if let v = sqliteDecodableType.decodeSQL(sqliteValue: .int(17)) {
+        print(v)
+      }
+    }
+  }
 
 }
 
-/// A test SQLiteEncodable type.
-struct IntThing : SQLiteEncodable {
+/// A test SQLiteCodable type.
+struct IntThing : SQLiteCodable {
   var a: Int
+
+  init(a: Int) {
+    self.a = a
+  }
   
+  init?(sqliteValue: SQLiteValue) {
+    if case let .int(i) = sqliteValue {
+      a = Int(i)
+    } else {
+      return nil
+    }
+  }
+    
   var sqliteValue: SQLiteValue {
     .int(Int64(a))
   }
