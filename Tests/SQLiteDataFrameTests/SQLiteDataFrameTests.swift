@@ -39,7 +39,7 @@ final class SQLiteDataFrameTests: XCTestCase {
   func testDataFrame() throws {
     var statement: OpaquePointer!
     try check(sqlite3_prepare_v2(
-      db, "select rowid, description, done, date from tasks order by rowid;",-1,&statement,nil))
+      db, "select rowid, description, done, date from tasks order by rowid",-1,&statement,nil))
     let dataFrame = try DataFrame(statement:statement)
     print(dataFrame)
     XCTAssertEqual(dataFrame.columns.count,4)
@@ -49,7 +49,7 @@ final class SQLiteDataFrameTests: XCTestCase {
   func testDataFrameFilterColumns() throws {
     var statement: OpaquePointer!
     try check(sqlite3_prepare_v2(
-      db, "select rowid, description, done from tasks order by rowid;",-1,&statement,nil))
+      db, "select rowid, description, done from tasks order by rowid",-1,&statement,nil))
     let dataFrame = try DataFrame(statement:statement, columns: ["bogus","description"])
     print(dataFrame)
     XCTAssertEqual(dataFrame.columns.count,1)
@@ -72,7 +72,7 @@ final class SQLiteDataFrameTests: XCTestCase {
   }
   
   func testTextStatement() throws {
-    let statement = "select description, date from tasks order by description;"
+    let statement = "select description, date from tasks order by description"
     let dataFrame = try DataFrame(connection:db, statement:statement)
     print(dataFrame)
     XCTAssertEqual(dataFrame.columns.count,2)
@@ -114,8 +114,54 @@ final class SQLiteDataFrameTests: XCTestCase {
     // Read the table into a data frame
     let dataFrame = try DataFrame(contentsOfSQLiteDatabaseFile:fileURL, table:"tasks")
     print(dataFrame)
-    
+  }
+  
+  func testWriteSQL() throws {
+    var d = DataFrame(columns: [
+      Column<String>(name:"description", capacity:0).eraseToAnyColumn(),
+      Column<Bool>(name:"done", capacity:0).eraseToAnyColumn(),
+      Column<Int8>(name:"byte", capacity:0).eraseToAnyColumn(),
+      Column<CGPoint>(name:"points", capacity:0).eraseToAnyColumn()
+    ])
+    d.append(row: "Pick up drycleaning", false, Int8(3), CGPoint(x: 1.0, y: 1.0))
+    d.append(row: "Rake leaves", false, Int8(3), CGPoint(x: 2.0, y: 2.0))
+    try print(DataFrame(csvData:d.csvRepresentation()))
 
+    try d.writeSQL(connection:db, statement: "insert into tasks (description, done) values (?,?)")
+    let tasks = try DataFrame(connection:db, table:"tasks")
+    print(tasks)
+    XCTAssertEqual(tasks.shape.rows, 5)
+  }
+  
+  func testWriteSQLTable() throws {
+    var d = DataFrame(columns: [
+      Column<String>(name:"description", capacity:0).eraseToAnyColumn(),
+      Column<Bool>(name:"done", capacity:0).eraseToAnyColumn(),
+      Column<Int8>(name:"byte", capacity:0).eraseToAnyColumn(),
+      Column<CGPoint>(name:"points", capacity:0).eraseToAnyColumn(),
+      Column<IntThing>(name:"thing", capacity:0).eraseToAnyColumn()
+    ])
+    d.append(row: "Pick up drycleaning", false, Int8(3), CGPoint(x: 1.0, y: 1.0), IntThing(a: 1))
+    d.append(row: "Rake leaves", false, Int8(3), CGPoint(x: 2.0, y: 2.0), IntThing(a: 2))
+    try d.writeSQL(connection:db, table: "newTable")
+    // Test writing twice is OK
+    d.append(row: "Watch TV", false, Int8(3), CGPoint(x: 2.0, y: 2.0), IntThing(a: 3))
+    d.appendEmptyRow()
+    try d.writeSQL(connection:db, table: "newTable")
+    let newTable = try DataFrame(connection:db, table:"newTable")
+    print(newTable)
+    XCTAssertEqual(newTable.shape.rows, 4)
   }
 
+}
+
+/// A test SQLiteEncodable type.
+struct IntThing : SQLiteEncodable {
+  var a: Int
+  
+  var sqliteValue: SQLiteValue {
+    .int(Int64(a))
+  }
+  
+  
 }

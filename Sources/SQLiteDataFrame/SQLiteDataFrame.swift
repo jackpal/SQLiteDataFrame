@@ -12,6 +12,29 @@ fileprivate func check(_ code: Int32) throws -> Int32 {
   return code
 }
 
+/// An enum that can hold any sqlite column value.
+public enum SQLiteValue {
+  case null
+  case int(Int64)
+  case real(Double)
+  case text(String)
+  case blob(Data)
+}
+
+/// A protocol that can convert a value to a SQLiteValue.
+public protocol SQLiteEncodable {
+  var sqliteValue: SQLiteValue { get }
+}
+
+/// A protocol that can convert a SQLiteValue to a value.
+public protocol SQLiteDecodable {
+  init?(sqliteValue: SQLiteValue)
+}
+
+public protocol SQLiteCodable : SQLiteEncodable, SQLiteDecodable {
+  
+}
+
 /// An enhanced version of the SQLite column type.
 public enum SQLiteType {
   case int
@@ -97,7 +120,6 @@ public extension DataFrame {
       try check(sqlite3_open($0, &db))
     }
     defer { sqlite3_close(db) }
-
     try self.init(connection:db, table:table, columns:columns, types:types, capacity:capacity)
   }
   
@@ -239,7 +261,7 @@ public extension DataFrame {
    
    The DataFrame's column types are determined by the columns' declared types, using a modified version of the
    SQLite3 [Type Affinity](https://www.sqlite.org/datatype3.html) rules.
-   If the column's type can't be determined, then the `.any` type is used.
+   If the               column's type can't be determined, then the `.any` type is used.
    */
   init(statement: OpaquePointer, columns: [String]? = nil,
        types: [String:SQLiteType]? = nil, capacity: Int = 0) throws {
@@ -255,9 +277,16 @@ public extension DataFrame {
     let columnCount = sqlite3_column_count(statement)
     let columnNames = (0..<columnCount).map { String(cString:sqlite3_column_name(statement, $0)) }
     let chosenColumnIndecies = (0..<columnCount).filter { allowedColumns?.contains(columnNames[Int($0)]) ?? true }
-    let chosenColumnTypes = chosenColumnIndecies.map {statementIndex in
-      types?[columnNames[Int(statementIndex)]] ??
-      SQLiteType(declaredType: String(cString:sqlite3_column_decltype(statement, statementIndex)))
+    let chosenColumnTypes = chosenColumnIndecies.map {statementIndex -> SQLiteType in
+      if let types = types {
+        if let chosenType = types[columnNames[Int(statementIndex)]] {
+          return chosenType
+        }
+      }
+      if let declType = sqlite3_column_decltype(statement, statementIndex) {
+        return SQLiteType(declaredType:String(cString:declType))
+      }
+      return SQLiteType(declaredType:"")
     }
     let chosenColumnIndeciesAndTypes = zip(chosenColumnIndecies, chosenColumnTypes)
     let columns = chosenColumnIndeciesAndTypes.map {(columnIndex, columnType) -> AnyColumn in
@@ -297,16 +326,16 @@ public extension DataFrame {
         if type != SQLITE_NULL {
           switch columnType {
           case .bool:
-            self.rows[rowIndex][col] = sqlite3_column_int64(statement, columnIndex) != 0
+            rows[rowIndex][col] = sqlite3_column_int64(statement, columnIndex) != 0
           case .int:
-            self.rows[rowIndex][col] = Int(sqlite3_column_int64(statement, columnIndex))
+            rows[rowIndex][col] = Int(sqlite3_column_int64(statement, columnIndex))
 
           case .float:
-            self.rows[rowIndex][col] = sqlite3_column_double(statement, columnIndex)
+            rows[rowIndex][col] = sqlite3_column_double(statement, columnIndex)
           case .text:
-            self.rows[rowIndex][col] = String(cString:sqlite3_column_text(statement, columnIndex))
+            rows[rowIndex][col] = String(cString:sqlite3_column_text(statement, columnIndex))
           case .blob:
-            self.rows[rowIndex][col] = Data(bytes:sqlite3_column_blob(statement, columnIndex),
+            rows[rowIndex][col] = Data(bytes:sqlite3_column_blob(statement, columnIndex),
                                            count:Int(sqlite3_column_bytes(statement, columnIndex)))
           case .date:
             // See "Date and Time Datatype" https://www.sqlite.org/datatype3.html
@@ -318,9 +347,9 @@ public extension DataFrame {
             case SQLITE_TEXT:
               let formatter = DateFormatter()
               formatter.dateFormat = "yyyy-MM-dd HH:mm:ss" //this is the sqlite's format
-              self.rows[rowIndex][col] = formatter.date(from:String(cString:sqlite3_column_text(statement, columnIndex)))
+              rows[rowIndex][col] = formatter.date(from:String(cString:sqlite3_column_text(statement, columnIndex)))
             case SQLITE_INTEGER:
-              self.rows[rowIndex][col] = Date(timeIntervalSince1970:
+              rows[rowIndex][col] = Date(timeIntervalSince1970:
                                                 TimeInterval(sqlite3_column_int64(statement, columnIndex)))
             case SQLITE_FLOAT:
               let SECONDS_PER_DAY = 86400.0
@@ -352,4 +381,165 @@ public extension DataFrame {
       rowIndex += 1
     }
   }
+  
+  /**
+   Write a table to a sqlite prepared statement.
+   
+   */
+  func writeSQL(statement: OpaquePointer, finalizeStatement: Bool = true) throws {
+    defer {
+      if finalizeStatement {
+        sqlite3_finalize(statement)
+      }
+    }
+    let columns = columns.prefix(Int(sqlite3_bind_parameter_count(statement)))
+    for rowIndex in 0..<shape.rows {
+      for (i, column) in columns.enumerated() {
+        let positionalIndex = Int32(1 + i)
+        guard let item = column[rowIndex] else {
+          try check(sqlite3_bind_null(statement, positionalIndex))
+          continue
+        }
+        try DataFrame.writeItem(statement:statement, positionalIndex:positionalIndex, item:item)
+      }
+      let rc = sqlite3_step(statement)
+      if rc != SQLITE_DONE {
+        throw NSError(domain: kDomain, code: -2, userInfo:["rc": NSNumber(value: rc),
+                                                           "row": NSNumber(value: rowIndex)])
+      }
+      try check(sqlite3_reset(statement))
+    }
+  }
+  
+  private static func writeItem(statement: OpaquePointer, positionalIndex: Int32, item: Any) throws {
+    let SQLITE_TRANSIENT = unsafeBitCast(OpaquePointer(bitPattern: -1), to: sqlite3_destructor_type.self)
+
+    switch item {
+    case let q as SQLiteEncodable:
+      switch q.sqliteValue {
+      case .null:
+        try check(sqlite3_bind_null(statement, positionalIndex))
+      case let .int(i):
+        try check(sqlite3_bind_int64(statement, positionalIndex, i))
+      case let .real(d):
+        try check(sqlite3_bind_double(statement, positionalIndex, d))
+      case let .text(s):
+        try check(sqlite3_bind_text(statement, positionalIndex, s.cString(using: .utf8),-1,SQLITE_TRANSIENT))
+      case let .blob(d):
+        try d.withUnsafeBytes {
+          _ = try check(sqlite3_bind_blob64(statement, positionalIndex, $0.baseAddress, sqlite3_uint64($0.count), SQLITE_TRANSIENT))
+        }
+      }
+    // These are hard coded rather than implemented as SQLiteEncodable so that the user can override them.
+    case let b as Bool:
+      try check(sqlite3_bind_int(statement, positionalIndex, Int32(b ? 1 : 0)))
+    case let i as Int8:
+      try check(sqlite3_bind_int(statement, positionalIndex, Int32(i)))
+    case let i as Int16:
+      try check(sqlite3_bind_int(statement, positionalIndex, Int32(i)))
+    case let i as Int32:
+      try check(sqlite3_bind_int(statement, positionalIndex, Int32(i)))
+    case let i as Int64:
+      try check(sqlite3_bind_int64(statement, positionalIndex, Int64(i)))
+    case let i as Int:
+      try check(sqlite3_bind_int64(statement, positionalIndex, Int64(i)))
+    case let i as UInt8:
+      try check(sqlite3_bind_int(statement, positionalIndex, Int32(i)))
+    case let i as UInt16:
+      try check(sqlite3_bind_int(statement, positionalIndex, Int32(i)))
+    case let i as UInt32:
+      try check(sqlite3_bind_int64(statement, positionalIndex, Int64(i)))
+    case let i as UInt64:
+      if i <= UInt64(Int64.max) {
+        try check(sqlite3_bind_int64(statement, positionalIndex, Int64(i)))
+      } else {
+        // It's better to preserve the data at the cost of strings vs writing nil or asserting.
+        try check(sqlite3_bind_text(statement, positionalIndex, String(i).cString(using: .utf8),-1,SQLITE_TRANSIENT))
+      }
+    case let f as Float:
+      try check(sqlite3_bind_double(statement, positionalIndex, Double(f)))
+    case let f as CGFloat:
+      try check(sqlite3_bind_double(statement, positionalIndex, Double(f)))
+    case let d as Double:
+      try check(sqlite3_bind_double(statement, positionalIndex, d))
+    case let s as String:
+      try check(sqlite3_bind_text(statement, positionalIndex, s.cString(using: .utf8),-1,SQLITE_TRANSIENT))
+    case let d as Date:
+      let formatter = DateFormatter()
+      formatter.dateFormat = "yyyy-MM-dd HH:mm:ss" //this is the sqlite's format.
+      let dateString = formatter.string(from: d)
+      try check(sqlite3_bind_text(statement, positionalIndex, dateString.cString(using: .utf8),-1,SQLITE_TRANSIENT))
+    // Backup
+    case let csc as CustomStringConvertible:
+      let s = csc.description
+      try check(sqlite3_bind_text(statement, positionalIndex, s.cString(using: .utf8),-1,SQLITE_TRANSIENT))
+    default:
+      let s = String(reflecting:item)
+      try check(sqlite3_bind_text(statement, positionalIndex, s.cString(using: .utf8),-1,SQLITE_TRANSIENT))
+    }
+
+  }
+  
+  func writeSQL(connection: OpaquePointer, statement: String) throws {
+    var preparedStatement: OpaquePointer!
+    try check(sqlite3_prepare_v2(connection, statement,-1,&preparedStatement,nil))
+    try writeSQL(statement:preparedStatement)
+  }
+
+  func writeSQL(connection: OpaquePointer, table: String) throws {
+    // Drop the table if it exists
+    try check(sqlite3_exec(connection, "drop table if exists \(table)", nil, nil, nil))
+    let columnDefs = columns.map {column -> String in
+      let name = column.name
+      var sqlType: String?
+      switch column.wrappedElementType {
+      case is String.Type:
+        sqlType = "TEXT"
+      case is Bool.Type:
+        sqlType = "BOOLEAN"
+      case is Int8.Type, is Int16.Type, is Int32.Type, is Int64.Type, is Int.Type,
+        is UInt8.Type, is UInt16.Type, is UInt32.Type, is UInt64.Type, is UInt.Type:
+        sqlType = "INT"
+      case is Float.Type:
+        sqlType = "FLOAT"
+      case is Double.Type:
+        sqlType = "DOUBLE"
+      case is Date.Type:
+        sqlType = "DATE"
+      case is Data.Type:
+        sqlType = "BLOB"
+      default:
+        break
+      }
+      if let sqlType = sqlType {
+        return "\(name) \(sqlType)"
+      }
+      return name
+    }
+    let columnSpec = columnDefs.joined(separator: ",")
+    let create = "create table \(table) (\(columnSpec))"
+    try check(sqlite3_exec(connection, create, nil, nil, nil))
+    let questionMarks = Array(repeating:"?", count:shape.columns).joined(separator: ",")
+    let statement = "insert into \(table) values (\(questionMarks))"
+    try writeSQL(connection:connection, statement: statement)
+  }
+  
+  func writeSQL(file: URL, statement: String) throws {
+    var db: OpaquePointer!
+    _ = try file.withUnsafeFileSystemRepresentation{
+      try check(sqlite3_open($0, &db))
+    }
+    defer { sqlite3_close(db) }
+    try writeSQL(connection:db, statement: statement)
+  }
+  
+  func writeSQL(file: URL, table: String) throws {
+    var db: OpaquePointer!
+    _ = try file.withUnsafeFileSystemRepresentation{
+      try check(sqlite3_open($0, &db))
+    }
+    defer { sqlite3_close(db) }
+    try writeSQL(connection: db, table: table)
+  }
+
 }
