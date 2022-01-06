@@ -178,13 +178,25 @@ final class SQLiteDataFrameTests: XCTestCase {
     print(d2)
   }
   
-  func testCasting() {
-    
+  func testCasting() throws {
+    var statement: OpaquePointer!
+    try check(sqlite3_prepare_v2(
+      db, "select rowid from tasks where rowid = 2",-1,&statement,nil))
+    XCTAssertEqual(try check(sqlite3_step(statement)), SQLITE_ROW)
     let anyType: Any.Type = IntThing.self
     if case let sqliteDecodableType as SQLiteDecodable.Type = anyType {
-      if let v = sqliteDecodableType.decodeSQL(sqliteValue: .int(17)) {
-        print(v)
+      if let v = sqliteDecodableType.decodeSQL(statement:statement, parameterIndex: Int32(0)) {
+        if case let thing as IntThing = v {
+          XCTAssertEqual(thing.a, 2)
+        } else {
+          XCTFail("Got wrong type: \(type(of: v))")
+        }
+      } else {
+        XCTFail("could not decode")
       }
+    } else {
+      XCTFail("could not cast")
+
     }
   }
 
@@ -198,12 +210,8 @@ struct IntThing : SQLiteCodable {
     self.a = a
   }
   
-  init?(sqliteValue: SQLiteValue) {
-    if case let .int(i) = sqliteValue {
-      a = Int(i)
-    } else {
-      return nil
-    }
+  init?(statement:OpaquePointer, parameterIndex: Int32) {
+    self.a = Int(sqlite3_column_int64(statement, parameterIndex))
   }
     
   var sqliteValue: SQLiteValue {

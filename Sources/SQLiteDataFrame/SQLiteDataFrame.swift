@@ -47,19 +47,19 @@ public protocol SQLiteEncodable {
 
 /// A protocol that can convert a SQLiteValue to a value.
 public protocol SQLiteDecodable {
-  init?(sqliteValue: SQLiteValue)
+  init?(statement:OpaquePointer, parameterIndex: Int32)
 }
 
 // https://stackoverflow.com/questions/45234233/why-cant-i-pass-a-protocol-type-to-a-generic-t-type-parameter
 
 extension SQLiteDecodable {
 
-  static func decodeSQL(sqliteValue: SQLiteValue) -> SQLiteDecodable? {
-    decodeSQLHelper(serviceType: self, sqliteValue: sqliteValue)
+  static func decodeSQL(statement:OpaquePointer, parameterIndex: Int32) -> SQLiteDecodable? {
+    decodeSQLHelper(serviceType: self, statement: statement, parameterIndex: parameterIndex)
   }
   
-  static func decodeSQLHelper<T>(serviceType: T.Type, sqliteValue: SQLiteValue) -> SQLiteDecodable? where T: SQLiteDecodable {
-    return T(sqliteValue: sqliteValue)
+  static func decodeSQLHelper<T>(serviceType: T.Type, statement:OpaquePointer, parameterIndex: Int32) -> SQLiteDecodable? where T: SQLiteDecodable {
+    return T(statement: statement, parameterIndex: parameterIndex)
   }
 
 }
@@ -379,8 +379,7 @@ public extension DataFrame {
         // Checking for SQLiteDecodable conformance before the nil check lets us have columns
         // that decode null as a value.
         if case let sqliteDecodableType as SQLiteDecodable.Type = column.wrappedElementType {
-          let sqlValue = SQLiteValue(statement:statement, columnIndex: columnIndex)
-          rows[rowIndex][col] = sqliteDecodableType.decodeSQL(sqliteValue: sqlValue)
+          rows[rowIndex][col] = sqliteDecodableType.decodeSQL(statement:statement, parameterIndex: columnIndex)
           continue
         }
         let sqlColumnType = sqlite3_column_type(statement, columnIndex)
