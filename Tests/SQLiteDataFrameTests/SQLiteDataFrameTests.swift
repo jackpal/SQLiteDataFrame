@@ -213,9 +213,9 @@ struct IntThing : SQLiteCodable {
   init?(statement:OpaquePointer, parameterIndex: Int32) {
     self.a = Int(sqlite3_column_int64(statement, parameterIndex))
   }
-    
-  var sqliteValue: SQLiteValue {
-    .int(Int64(a))
+  
+  func encodeSQLiteValue(statement:OpaquePointer, bindingIndex: Int32) -> Int32 {
+    sqlite3_bind_int64(statement, bindingIndex, Int64(a))
   }
   
   

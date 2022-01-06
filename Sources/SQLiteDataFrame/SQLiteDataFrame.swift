@@ -42,7 +42,7 @@ public enum SQLiteValue {
 
 /// A protocol that can convert a value to a SQLiteValue.
 public protocol SQLiteEncodable {
-  var sqliteValue: SQLiteValue { get }
+  func encodeSQLiteValue(statement:OpaquePointer, bindingIndex: Int32) -> Int32
 }
 
 /// A protocol that can convert a SQLiteValue to a value.
@@ -296,8 +296,12 @@ public extension DataFrame {
    If the               column's type can't be determined, then the `.any` type is used.
    */
   init(statement: OpaquePointer, columns: [String]? = nil,
-       types: [String:SQLiteType]? = nil, capacity: Int = 0) throws {
-    defer { sqlite3_finalize(statement) }
+       types: [String:SQLiteType]? = nil, capacity: Int = 0, finalizeStatement: Bool = true) throws {
+    defer {
+      if finalizeStatement {
+        sqlite3_finalize(statement)
+      }
+    }
     
     let allowedColumns: Set<String>?
     if let columns = columns {
@@ -341,7 +345,7 @@ public extension DataFrame {
       }
     }
     self.init(columns: columns)
-    try readSQL(statement: statement)
+    try readSQL(statement: statement, finalizeStatement: false)
   }
 
   mutating func readSQL(connection: OpaquePointer, table: String) throws {
@@ -499,20 +503,7 @@ public extension DataFrame {
 
     switch item {
     case let q as SQLiteEncodable:
-      switch q.sqliteValue {
-      case .null:
-        try check(sqlite3_bind_null(statement, positionalIndex))
-      case let .int(i):
-        try check(sqlite3_bind_int64(statement, positionalIndex, i))
-      case let .real(d):
-        try check(sqlite3_bind_double(statement, positionalIndex, d))
-      case let .text(s):
-        try check(sqlite3_bind_text(statement, positionalIndex, s.cString(using: .utf8),-1,SQLITE_TRANSIENT))
-      case let .blob(d):
-        try d.withUnsafeBytes {
-          _ = try check(sqlite3_bind_blob64(statement, positionalIndex, $0.baseAddress, sqlite3_uint64($0.count), SQLITE_TRANSIENT))
-        }
-      }
+      try check(q.encodeSQLiteValue(statement: statement, bindingIndex: positionalIndex))
     // These are hard coded rather than implemented as SQLiteEncodable so that the user can override them.
     case let b as Bool:
       try check(sqlite3_bind_int(statement, positionalIndex, Int32(b ? 1 : 0)))
