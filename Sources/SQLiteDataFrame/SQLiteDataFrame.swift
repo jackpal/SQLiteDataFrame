@@ -324,7 +324,7 @@ public extension DataFrame {
    ```
    // Error checking omitted for brevity.
    
-   var db: OpaquePointer!
+   var db: SQLiteConnection!
    _ = sqlite3_open(":memory:", &db)
    defer { sqlite3_close(db) }
    _ = sqlite3_exec(db, """
@@ -522,8 +522,43 @@ public extension DataFrame {
   }
   
   /**
-   Write a table to a sqlite prepared statement.
+   Write a dataFrame to a sqlite prepared statement.
+   - Parameter statement: The prepared statement.
+   - Parameter finalizeStatement: If true, will finalize `statement` when it is finished producing rows.
    
+   The columns of the dataframe are bound to the statement parameters in column index
+   order.
+   
+   If there are more dataframe columns than table columns, the extra table columns will be written as null.
+   
+   If there are more DataFrame columns than table columns, only the first N columns
+   will be transferred.
+   
+   Example
+   ```
+   var db: SQLiteConnection!
+   defer { sqlite3_close(db) }
+   try checkSQLite(sqlite3_open(":memory:", &db))
+   try checkSQLite(sqlite3_exec(db, """
+     create table tasks (
+       description text not null,
+       done bool default false not null
+     );
+""", nil, nil, nil))
+   
+   let tasks = DataFrame(columns: [
+     Column<String>(name:"description", capacity:0).eraseToAnyColumn(),
+     Column<Bool>(name:"done", capacity:0).eraseToAnyColumn(),
+   ])
+   tasks.append(row: "Rake leaves", false)
+   tasks.append(row, "Make coffee", true)
+
+   var statement: SQLiteStatement!
+   try checkSQLite(sqlite3_prepare_v2(db,
+       "insert into tasks (description, done) values (?,?)", -1, &statement, nil))
+
+   try tasks.writeSQL(statement: statement)
+   ```
    */
   func writeSQL(statement: SQLiteStatement, finalizeStatement: Bool = true) throws {
     defer {
@@ -608,13 +643,76 @@ public extension DataFrame {
     }
 
   }
+  /**
+  Write a dataFrame to a sqlite prepared statement.
+  - Parameter connection: The SQlite database connection
+  - Parameter statement: The SQL statement.
   
-  func writeSQL(connection: OpaquePointer, statement: String) throws {
+  The columns of the dataframe are bound to the statement parameters in column index
+  order.
+  
+  If there are more dataframe columns than table columns, the extra table columns will be written as null.
+  
+  If there are more DataFrame columns than table columns, only the first N columns
+  will be transferred.
+  
+  Example
+  ```
+  var db: SQLiteConnection!
+  defer { sqlite3_close(db) }
+  try checkSQLite(sqlite3_open(":memory:", &db))
+  try checkSQLite(sqlite3_exec(db, """
+    create table tasks (
+      description text not null,
+      done bool default false not null
+    );
+""", nil, nil, nil))
+  
+  let tasks = DataFrame(columns: [
+    Column<String>(name:"description", capacity:0).eraseToAnyColumn(),
+    Column<Bool>(name:"done", capacity:0).eraseToAnyColumn(),
+  ])
+  tasks.append(row: "Rake leaves", false)
+  tasks.append(row, "Make coffee", true)
+
+  try tasks.writeSQL(connection:db,
+    statement: "insert into tasks (description, done) values (?,?)")
+  ```
+*/
+  func writeSQL(connection: SQLiteConnection, statement: String) throws {
     var preparedStatement: SQLiteStatement!
     try checkSQLite(sqlite3_prepare_v2(connection, statement,-1,&preparedStatement,nil))
     try writeSQL(statement:preparedStatement)
   }
+  
+  /**
+  Write a dataFrame to a sqlite table.
+  - Parameter connection: The SQlite database connection
+  - Parameter table: The name of the table to write.
+  
+  The columns of the dataframe are written to an SQL table. If the table already exists,
+   then it will be replaced.
+   
+   The DataFrame column names and wrapped types will be used to create the
+   SQL column names.
+   
+  Example
+  ```
+  var db: SQLiteConnection!
+  defer { sqlite3_close(db) }
+  try checkSQLite(sqlite3_open(":memory:", &db))
+  
+  let tasks = DataFrame(columns: [
+    Column<String>(name:"description", capacity:0).eraseToAnyColumn(),
+    Column<Bool>(name:"done", capacity:0).eraseToAnyColumn(),
+  ])
+  tasks.append(row: "Rake leaves", false)
+  tasks.append(row, "Make coffee", true)
 
+  // Creates a table named "tasks".
+  try tasks.writeSQL(connection:db, table: "tasks")
+  ```
+*/
   func writeSQL(connection: OpaquePointer, table: String) throws {
     // Drop the table if it exists
     try checkSQLite(sqlite3_exec(connection, "drop table if exists \(table)", nil, nil, nil))
@@ -653,6 +751,47 @@ public extension DataFrame {
     try writeSQL(connection:connection, statement: statement)
   }
   
+  /**
+  Write a dataFrame to a sqlite statement in a SQLite database.
+  - Parameter file: The SQlite database file
+  - Parameter statement: The SQL statement to execute.
+   
+   The columns of the dataframe are bound to the statement parameters in column index
+   order.
+   
+   If there are more dataframe columns than table columns, the extra table columns will be written as null.
+   
+   If there are more DataFrame columns than table columns, only the first N columns
+   will be transferred.
+   
+   Example
+   ```
+   let fileURL = URL(fileURLWithPath: "temp.db")
+   { // Create and close a sqlite database
+     var db: SQLiteConnection!
+     defer { sqlite3_close(db) }
+     try _ = fileURL.withUnsafeFileSystemRepresentation {
+       try check(sqlite3_open($0, &db))
+     }
+     try checkSQLite(sqlite3_exec(db, """
+       create table tasks (
+         description text not null,
+         done bool default false not null
+       );
+   """, nil, nil, nil))
+   }
+   
+   let tasks = DataFrame(columns: [
+     Column<String>(name:"description", capacity:0).eraseToAnyColumn(),
+     Column<Bool>(name:"done", capacity:0).eraseToAnyColumn(),
+   ])
+   tasks.append(row: "Rake leaves", false)
+   tasks.append(row, "Make coffee", true)
+
+   try tasks.writeSQL(file:fileURL,
+     statement: "insert into tasks (description, done) values (?,?)")
+   ```
+*/
   func writeSQL(file: URL, statement: String) throws {
     var db: OpaquePointer!
     _ = try file.withUnsafeFileSystemRepresentation{
@@ -662,6 +801,31 @@ public extension DataFrame {
     try writeSQL(connection:db, statement: statement)
   }
   
+  /**
+  Write a dataFrame to a sqlite table in a sqlite database file.
+  - Parameter file: The SQlite database file
+  - Parameter table: The name of the table to write.
+  
+  The columns of the dataframe are written to an SQL table. If the table already exists,
+   then it will be replaced.
+   
+   The DataFrame column names and wrapped types will be used to create the
+   SQL column names.
+   
+  Example
+  ```
+  let tasks = DataFrame(columns: [
+    Column<String>(name:"description", capacity:0).eraseToAnyColumn(),
+    Column<Bool>(name:"done", capacity:0).eraseToAnyColumn(),
+  ])
+  tasks.append(row: "Rake leaves", false)
+  tasks.append(row, "Make coffee", true)
+
+  // Creates a table named "tasks".
+  let fileURL = URL(fileURLWithPath: "temp.db")
+  try tasks.writeSQL(file:fileURL, table: "tasks")
+  ```
+*/
   func writeSQL(file: URL, table: String) throws {
     var db: OpaquePointer!
     _ = try file.withUnsafeFileSystemRepresentation{
