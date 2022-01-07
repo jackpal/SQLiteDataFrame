@@ -185,7 +185,7 @@ final class SQLiteDataFrameTests: XCTestCase {
     XCTAssertEqual(try check(sqlite3_step(statement)), SQLITE_ROW)
     let anyType: Any.Type = IntThing.self
     if case let sqliteDecodableType as SQLiteDecodable.Type = anyType {
-      if let v = sqliteDecodableType.decodeSQL(statement:statement, parameterIndex: Int32(0)) {
+      if let v = sqliteDecodableType.decodeSQL(statement:statement, columnIndex: Int32(0)) {
         if case let thing as IntThing = v {
           XCTAssertEqual(thing.a, 2)
         } else {
@@ -204,19 +204,19 @@ final class SQLiteDataFrameTests: XCTestCase {
 
 /// A test SQLiteCodable type.
 struct IntThing : SQLiteCodable {
+  
   var a: Int
 
   init(a: Int) {
     self.a = a
   }
   
-  init?(statement:OpaquePointer, parameterIndex: Int32) {
-    self.a = Int(sqlite3_column_int64(statement, parameterIndex))
+  init?(statement:OpaquePointer, columnIndex: Int32) {
+    self.a = Int(sqlite3_column_int64(statement, columnIndex))
   }
   
-  func encodeSQLiteValue(statement:OpaquePointer, bindingIndex: Int32) -> Int32 {
-    sqlite3_bind_int64(statement, bindingIndex, Int64(a))
+  func encodeSQLiteValue() -> SQLiteValue {
+    .int(Int64(a))
   }
-  
   
 }

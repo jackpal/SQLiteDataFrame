@@ -2,6 +2,12 @@ import Foundation
 import SQLite3
 import TabularData
 
+fileprivate let SQLITE_TRANSIENT = unsafeBitCast(OpaquePointer(bitPattern: -1), to: sqlite3_destructor_type.self)
+
+public typealias SQLiteStatement = OpaquePointer
+
+public typealias SQLiteConnection = OpaquePointer
+
 /// The NSError domain for errors thrown from this library.
 let kSQLiteDataFrameDomain = "SQLiteDataFrame"
 
@@ -36,8 +42,11 @@ public enum SQLiteValue {
   case real(Double)
   case text(String)
   case blob(Data)
+}
+
+fileprivate extension SQLiteValue {
   
-  init(statement:OpaquePointer, columnIndex: Int32) {
+  init(statement:SQLiteStatement, columnIndex: Int32) {
     let columnType = sqlite3_column_type(statement, columnIndex)
     switch columnType {
     case SQLITE_NULL:
@@ -55,28 +64,54 @@ public enum SQLiteValue {
       fatalError("Unknown column type \(columnType) at columnIndex \(columnIndex)")
     }
   }
+  
+  func bind(statement:SQLiteStatement, columnIndex col: Int32) throws {
+    switch self {
+    case .null:
+      try checkSQLite(sqlite3_bind_null(statement,col))
+    case let .int(i):
+      try checkSQLite(sqlite3_bind_int64(statement,col,i))
+    case let .real(d):
+      try checkSQLite(sqlite3_bind_double(statement,col,d))
+    case let .text(s):
+      try checkSQLite(sqlite3_bind_text(statement, col, String(s).cString(using: .utf8),-1,SQLITE_TRANSIENT))
+    case let .blob(b):
+      try b.withUnsafeBytes {
+        _ = try checkSQLite(sqlite3_bind_blob64(statement, col, $0.baseAddress, sqlite3_uint64($0.count), SQLITE_TRANSIENT))
+      }
+    }
+  }
 }
 
 /// A protocol that can convert a value to a SQLiteValue.
+///
+/// Example:
+///
+/// ```
+/// extend MyStruct: SQLiteEncodable {
+/// func encodeSQLiteValue() -> SQliteValue {
+///   .text(self.description)
+/// }
+/// ```
 public protocol SQLiteEncodable {
-  func encodeSQLiteValue(statement:OpaquePointer, bindingIndex: Int32) -> Int32
+  func encodeSQLiteValue() -> SQLiteValue
 }
 
 /// A protocol that can convert a SQLiteValue to a value.
 public protocol SQLiteDecodable {
-  init?(statement:OpaquePointer, parameterIndex: Int32)
+  init?(statement: SQLiteStatement, columnIndex: Int32)
 }
 
 // https://stackoverflow.com/questions/45234233/why-cant-i-pass-a-protocol-type-to-a-generic-t-type-parameter
 
 extension SQLiteDecodable {
 
-  static func decodeSQL(statement:OpaquePointer, parameterIndex: Int32) -> SQLiteDecodable? {
-    decodeSQLHelper(serviceType: self, statement: statement, parameterIndex: parameterIndex)
+  static func decodeSQL(statement:SQLiteStatement, columnIndex: Int32) -> SQLiteDecodable? {
+    decodeSQLHelper(serviceType: self, statement: statement, columnIndex: columnIndex)
   }
   
-  static func decodeSQLHelper<T>(serviceType: T.Type, statement:OpaquePointer, parameterIndex: Int32) -> SQLiteDecodable? where T: SQLiteDecodable {
-    return T(statement: statement, parameterIndex: parameterIndex)
+  static func decodeSQLHelper<T>(serviceType: T.Type, statement:SQLiteStatement, columnIndex: Int32) -> SQLiteDecodable? where T: SQLiteDecodable {
+    return T(statement: statement, columnIndex: columnIndex)
   }
 
 }
@@ -265,7 +300,7 @@ public extension DataFrame {
     types: [String:SQLiteType]? = nil,
     capacity: Int = 0
   ) throws {
-    var preparedStatement: OpaquePointer!
+    var preparedStatement: SQLiteStatement!
     try checkSQLite(sqlite3_prepare_v2(connection, statement, -1, &preparedStatement, nil))
     try self.init(statement:preparedStatement, columns:columns, types:types, capacity:capacity)
   }
@@ -301,7 +336,7 @@ public extension DataFrame {
      insert into tasks (description) values ('Drink milk');
      insert into tasks (description) values ('Write code');
 """, nil, nil, nil)
-   var statement: OpaquePointer!
+   var statement: SQLiteStatement!
    _ = sqlite3_prepare_v2(db,
        "select rowid, description, done from tasks order by rowid;",-1,&statement,nil)
    
@@ -312,7 +347,7 @@ public extension DataFrame {
    SQLite3 [Type Affinity](https://www.sqlite.org/datatype3.html) rules.
    If the               column's type can't be determined, then the `.any` type is used.
    */
-  init(statement: OpaquePointer, columns: [String]? = nil,
+  init(statement: SQLiteStatement, columns: [String]? = nil,
        types: [String:SQLiteType]? = nil, capacity: Int = 0, finalizeStatement: Bool = true) throws {
     defer {
       if finalizeStatement {
@@ -372,12 +407,12 @@ public extension DataFrame {
   }
 
   mutating func readSQL(connection: OpaquePointer, statement: String) throws {
-    var preparedStatement: OpaquePointer!
+    var preparedStatement: SQLiteStatement!
     try checkSQLite(sqlite3_prepare_v2(connection, statement,-1,&preparedStatement,nil))
     try readSQL(statement: preparedStatement)
   }
   
-  mutating func readSQL(statement: OpaquePointer, finalizeStatement: Bool = true) throws {
+  mutating func readSQL(statement: SQLiteStatement, finalizeStatement: Bool = true) throws {
     defer {
       if finalizeStatement {
         sqlite3_finalize(statement)
@@ -400,7 +435,7 @@ public extension DataFrame {
         // Checking for SQLiteDecodable conformance before the nil check lets us have columns
         // that decode null as a value.
         if case let sqliteDecodableType as SQLiteDecodable.Type = column.wrappedElementType {
-          rows[rowIndex][col] = sqliteDecodableType.decodeSQL(statement:statement, parameterIndex: columnIndex)
+          rows[rowIndex][col] = sqliteDecodableType.decodeSQL(statement:statement, columnIndex: columnIndex)
           continue
         }
         let sqlColumnType = sqlite3_column_type(statement, columnIndex)
@@ -490,7 +525,7 @@ public extension DataFrame {
    Write a table to a sqlite prepared statement.
    
    */
-  func writeSQL(statement: OpaquePointer, finalizeStatement: Bool = true) throws {
+  func writeSQL(statement: SQLiteStatement, finalizeStatement: Bool = true) throws {
     defer {
       if finalizeStatement {
         sqlite3_finalize(statement)
@@ -515,12 +550,11 @@ public extension DataFrame {
     }
   }
   
-  private static func writeItem(statement: OpaquePointer, positionalIndex: Int32, item: Any) throws {
-    let SQLITE_TRANSIENT = unsafeBitCast(OpaquePointer(bitPattern: -1), to: sqlite3_destructor_type.self)
-
+  private static func writeItem(statement: SQLiteStatement, positionalIndex: Int32, item: Any) throws {
     switch item {
     case let q as SQLiteEncodable:
-      try checkSQLite(q.encodeSQLiteValue(statement: statement, bindingIndex: positionalIndex))
+      let sqliteValue = q.encodeSQLiteValue()
+      try sqliteValue.bind(statement: statement, columnIndex: positionalIndex)
     // These are hard coded rather than implemented as SQLiteEncodable so that the user can override them.
     case let b as Bool:
       try checkSQLite(sqlite3_bind_int(statement, positionalIndex, Int32(b ? 1 : 0)))
@@ -555,6 +589,10 @@ public extension DataFrame {
       try checkSQLite(sqlite3_bind_double(statement, positionalIndex, d))
     case let s as String:
       try checkSQLite(sqlite3_bind_text(statement, positionalIndex, s.cString(using: .utf8),-1,SQLITE_TRANSIENT))
+    case let d as Data:
+      try d.withUnsafeBytes {
+        _ = try checkSQLite(sqlite3_bind_blob64(statement, positionalIndex, $0.baseAddress, sqlite3_uint64($0.count), SQLITE_TRANSIENT))
+      }
     case let d as Date:
       let formatter = DateFormatter()
       formatter.dateFormat = "yyyy-MM-dd HH:mm:ss" //this is the sqlite's format.
@@ -572,7 +610,7 @@ public extension DataFrame {
   }
   
   func writeSQL(connection: OpaquePointer, statement: String) throws {
-    var preparedStatement: OpaquePointer!
+    var preparedStatement: SQLiteStatement!
     try checkSQLite(sqlite3_prepare_v2(connection, statement,-1,&preparedStatement,nil))
     try writeSQL(statement:preparedStatement)
   }
