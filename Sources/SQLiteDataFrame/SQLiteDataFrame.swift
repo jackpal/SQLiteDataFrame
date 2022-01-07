@@ -2,12 +2,29 @@ import Foundation
 import SQLite3
 import TabularData
 
-fileprivate let kDomain = "SQLiteDataFrame"
+/// The NSError domain for errors thrown from this library.
+let kSQLiteDataFrameDomain = "SQLiteDataFrame"
 
+/// Utility method for converting C-style sqlite return codes into Swift errors.
+///
+/// Example usage:
+///
+/// ```
+///     try checkSQLite(sqlite3_open(":memory:", &db))
+/// ```
+///
+/// The sqlite3 return code is returned as a discardable result. This is useful for
+/// functions like `sqlite3_step`:
+///
+/// ```
+///     let step_result = try checkSQLite(sqlite3_step(statement))
+///     if step_result == SQLITE_DONE {
+///               ...
+/// ```
 @discardableResult
-fileprivate func check(_ code: Int32) throws -> Int32 {
+func checkSQLite(_ code: Int32) throws -> Int32 {
   if code != SQLITE_OK && code != SQLITE_ROW && code != SQLITE_DONE {
-    throw NSError(domain:kDomain, code:Int(code))
+    throw NSError(domain:kSQLiteDataFrameDomain, code:Int(code))
   }
   return code
 }
@@ -149,7 +166,7 @@ public extension DataFrame {
        types: [String:SQLiteType]? = nil, capacity: Int = 0) throws {
     var db: OpaquePointer!
     _ = try sqliteDatabaseFile.withUnsafeFileSystemRepresentation{
-      try check(sqlite3_open($0, &db))
+      try checkSQLite(sqlite3_open($0, &db))
     }
     defer { sqlite3_close(db) }
     try self.init(connection:db, table:table, columns:columns, types:types, capacity:capacity)
@@ -249,7 +266,7 @@ public extension DataFrame {
     capacity: Int = 0
   ) throws {
     var preparedStatement: OpaquePointer!
-    try check(sqlite3_prepare_v2(connection, statement, -1, &preparedStatement, nil))
+    try checkSQLite(sqlite3_prepare_v2(connection, statement, -1, &preparedStatement, nil))
     try self.init(statement:preparedStatement, columns:columns, types:types, capacity:capacity)
   }
   
@@ -356,7 +373,7 @@ public extension DataFrame {
 
   mutating func readSQL(connection: OpaquePointer, statement: String) throws {
     var preparedStatement: OpaquePointer!
-    try check(sqlite3_prepare_v2(connection, statement,-1,&preparedStatement,nil))
+    try checkSQLite(sqlite3_prepare_v2(connection, statement,-1,&preparedStatement,nil))
     try readSQL(statement: preparedStatement)
   }
   
@@ -374,7 +391,7 @@ public extension DataFrame {
           break
       }
       if rc != SQLITE_ROW {
-        throw NSError(domain: kDomain, code: -2, userInfo:["rc": NSNumber(value: rc),
+        throw NSError(domain: kSQLiteDataFrameDomain, code: -2, userInfo:["rc": NSNumber(value: rc),
                                                            "row": NSNumber(value: rowIndex)])
       }
       self.appendEmptyRow()
@@ -484,17 +501,17 @@ public extension DataFrame {
       for (i, column) in columns.enumerated() {
         let positionalIndex = Int32(1 + i)
         guard let item = column[rowIndex] else {
-          try check(sqlite3_bind_null(statement, positionalIndex))
+          try checkSQLite(sqlite3_bind_null(statement, positionalIndex))
           continue
         }
         try DataFrame.writeItem(statement:statement, positionalIndex:positionalIndex, item:item)
       }
       let rc = sqlite3_step(statement)
       if rc != SQLITE_DONE {
-        throw NSError(domain: kDomain, code: -2, userInfo:["rc": NSNumber(value: rc),
+        throw NSError(domain: kSQLiteDataFrameDomain, code: -2, userInfo:["rc": NSNumber(value: rc),
                                                            "row": NSNumber(value: rowIndex)])
       }
-      try check(sqlite3_reset(statement))
+      try checkSQLite(sqlite3_reset(statement))
     }
   }
   
@@ -503,66 +520,66 @@ public extension DataFrame {
 
     switch item {
     case let q as SQLiteEncodable:
-      try check(q.encodeSQLiteValue(statement: statement, bindingIndex: positionalIndex))
+      try checkSQLite(q.encodeSQLiteValue(statement: statement, bindingIndex: positionalIndex))
     // These are hard coded rather than implemented as SQLiteEncodable so that the user can override them.
     case let b as Bool:
-      try check(sqlite3_bind_int(statement, positionalIndex, Int32(b ? 1 : 0)))
+      try checkSQLite(sqlite3_bind_int(statement, positionalIndex, Int32(b ? 1 : 0)))
     case let i as Int8:
-      try check(sqlite3_bind_int(statement, positionalIndex, Int32(i)))
+      try checkSQLite(sqlite3_bind_int(statement, positionalIndex, Int32(i)))
     case let i as Int16:
-      try check(sqlite3_bind_int(statement, positionalIndex, Int32(i)))
+      try checkSQLite(sqlite3_bind_int(statement, positionalIndex, Int32(i)))
     case let i as Int32:
-      try check(sqlite3_bind_int(statement, positionalIndex, Int32(i)))
+      try checkSQLite(sqlite3_bind_int(statement, positionalIndex, Int32(i)))
     case let i as Int64:
-      try check(sqlite3_bind_int64(statement, positionalIndex, Int64(i)))
+      try checkSQLite(sqlite3_bind_int64(statement, positionalIndex, Int64(i)))
     case let i as Int:
-      try check(sqlite3_bind_int64(statement, positionalIndex, Int64(i)))
+      try checkSQLite(sqlite3_bind_int64(statement, positionalIndex, Int64(i)))
     case let i as UInt8:
-      try check(sqlite3_bind_int(statement, positionalIndex, Int32(i)))
+      try checkSQLite(sqlite3_bind_int(statement, positionalIndex, Int32(i)))
     case let i as UInt16:
-      try check(sqlite3_bind_int(statement, positionalIndex, Int32(i)))
+      try checkSQLite(sqlite3_bind_int(statement, positionalIndex, Int32(i)))
     case let i as UInt32:
-      try check(sqlite3_bind_int64(statement, positionalIndex, Int64(i)))
+      try checkSQLite(sqlite3_bind_int64(statement, positionalIndex, Int64(i)))
     case let i as UInt64:
       if i <= UInt64(Int64.max) {
-        try check(sqlite3_bind_int64(statement, positionalIndex, Int64(i)))
+        try checkSQLite(sqlite3_bind_int64(statement, positionalIndex, Int64(i)))
       } else {
         // It's better to preserve the data at the cost of strings vs writing nil or asserting.
-        try check(sqlite3_bind_text(statement, positionalIndex, String(i).cString(using: .utf8),-1,SQLITE_TRANSIENT))
+        try checkSQLite(sqlite3_bind_text(statement, positionalIndex, String(i).cString(using: .utf8),-1,SQLITE_TRANSIENT))
       }
     case let f as Float:
-      try check(sqlite3_bind_double(statement, positionalIndex, Double(f)))
+      try checkSQLite(sqlite3_bind_double(statement, positionalIndex, Double(f)))
     case let f as CGFloat:
-      try check(sqlite3_bind_double(statement, positionalIndex, Double(f)))
+      try checkSQLite(sqlite3_bind_double(statement, positionalIndex, Double(f)))
     case let d as Double:
-      try check(sqlite3_bind_double(statement, positionalIndex, d))
+      try checkSQLite(sqlite3_bind_double(statement, positionalIndex, d))
     case let s as String:
-      try check(sqlite3_bind_text(statement, positionalIndex, s.cString(using: .utf8),-1,SQLITE_TRANSIENT))
+      try checkSQLite(sqlite3_bind_text(statement, positionalIndex, s.cString(using: .utf8),-1,SQLITE_TRANSIENT))
     case let d as Date:
       let formatter = DateFormatter()
       formatter.dateFormat = "yyyy-MM-dd HH:mm:ss" //this is the sqlite's format.
       let dateString = formatter.string(from: d)
-      try check(sqlite3_bind_text(statement, positionalIndex, dateString.cString(using: .utf8),-1,SQLITE_TRANSIENT))
+      try checkSQLite(sqlite3_bind_text(statement, positionalIndex, dateString.cString(using: .utf8),-1,SQLITE_TRANSIENT))
     // Backup
     case let csc as CustomStringConvertible:
       let s = csc.description
-      try check(sqlite3_bind_text(statement, positionalIndex, s.cString(using: .utf8),-1,SQLITE_TRANSIENT))
+      try checkSQLite(sqlite3_bind_text(statement, positionalIndex, s.cString(using: .utf8),-1,SQLITE_TRANSIENT))
     default:
       let s = String(reflecting:item)
-      try check(sqlite3_bind_text(statement, positionalIndex, s.cString(using: .utf8),-1,SQLITE_TRANSIENT))
+      try checkSQLite(sqlite3_bind_text(statement, positionalIndex, s.cString(using: .utf8),-1,SQLITE_TRANSIENT))
     }
 
   }
   
   func writeSQL(connection: OpaquePointer, statement: String) throws {
     var preparedStatement: OpaquePointer!
-    try check(sqlite3_prepare_v2(connection, statement,-1,&preparedStatement,nil))
+    try checkSQLite(sqlite3_prepare_v2(connection, statement,-1,&preparedStatement,nil))
     try writeSQL(statement:preparedStatement)
   }
 
   func writeSQL(connection: OpaquePointer, table: String) throws {
     // Drop the table if it exists
-    try check(sqlite3_exec(connection, "drop table if exists \(table)", nil, nil, nil))
+    try checkSQLite(sqlite3_exec(connection, "drop table if exists \(table)", nil, nil, nil))
     let columnDefs = columns.map {column -> String in
       let name = column.name
       var sqlType: String?
@@ -592,7 +609,7 @@ public extension DataFrame {
     }
     let columnSpec = columnDefs.joined(separator: ",")
     let create = "create table \(table) (\(columnSpec))"
-    try check(sqlite3_exec(connection, create, nil, nil, nil))
+    try checkSQLite(sqlite3_exec(connection, create, nil, nil, nil))
     let questionMarks = Array(repeating:"?", count:shape.columns).joined(separator: ",")
     let statement = "insert into \(table) values (\(questionMarks))"
     try writeSQL(connection:connection, statement: statement)
@@ -601,7 +618,7 @@ public extension DataFrame {
   func writeSQL(file: URL, statement: String) throws {
     var db: OpaquePointer!
     _ = try file.withUnsafeFileSystemRepresentation{
-      try check(sqlite3_open($0, &db))
+      try checkSQLite(sqlite3_open($0, &db))
     }
     defer { sqlite3_close(db) }
     try writeSQL(connection:db, statement: statement)
@@ -610,7 +627,7 @@ public extension DataFrame {
   func writeSQL(file: URL, table: String) throws {
     var db: OpaquePointer!
     _ = try file.withUnsafeFileSystemRepresentation{
-      try check(sqlite3_open($0, &db))
+      try checkSQLite(sqlite3_open($0, &db))
     }
     defer { sqlite3_close(db) }
     try writeSQL(connection: db, table: table)
