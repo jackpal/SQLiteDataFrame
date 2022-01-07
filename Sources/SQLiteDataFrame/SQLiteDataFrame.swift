@@ -397,22 +397,44 @@ public extension DataFrame {
       }
     }
     self.init(columns: columns)
-    try readSQL(statement: statement, finalizeStatement: false)
+    try appendSQL(statement: statement, finalizeStatement: false)
   }
 
-  mutating func readSQL(connection: OpaquePointer, table: String) throws {
+  /**
+   Append the contents of the given table to this DataFrame.
+   - Parameter connection: the sqlite database connection..
+   - Parameter table: the name of the table to read.
+
+   Columns are matched by name.
+   */
+  mutating func appendSQL(connection: SQLiteConnection, table: String) throws {
     let columnText = columns.map(\.name).joined(separator: ",")
     let statement = "SELECT \(columnText) FROM \(table);"
-    try readSQL(connection: connection, statement: statement)
+    try appendSQL(connection: connection, statement: statement)
   }
 
-  mutating func readSQL(connection: OpaquePointer, statement: String) throws {
+  /**
+   Append the contents of the given table to this DataFrame.
+   - Parameter connection: the sqlite database connection..
+   - Parameter statement: the sqlite statement.
+   
+   Columns are matched ito statement parameters n DataFrame column order.
+   */
+  mutating func appendSQL(connection: SQLiteConnection, statement: String) throws {
     var preparedStatement: SQLiteStatement!
     try checkSQLite(sqlite3_prepare_v2(connection, statement,-1,&preparedStatement,nil))
-    try readSQL(statement: preparedStatement)
+    try appendSQL(statement: preparedStatement)
   }
   
-  mutating func readSQL(statement: SQLiteStatement, finalizeStatement: Bool = true) throws {
+  /**
+   Append the contents of the given table to this DataFrame.
+   
+   - Parameter statement: the prepared statement.
+   - Parameter finalizeStatement: If true, the prepared statement will be finalized after the read completes.
+   
+   Columns are matched ito statement parameters n DataFrame column order.
+   */
+  mutating func appendSQL(statement: SQLiteStatement, finalizeStatement: Bool = true) throws {
     defer {
       if finalizeStatement {
         sqlite3_finalize(statement)

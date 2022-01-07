@@ -153,7 +153,7 @@ final class SQLiteDataFrameTests: XCTestCase {
     XCTAssertEqual(newTable.shape.rows, 4)
   }
   
-  func testReadSQLTable() throws {
+  func testAppendSQLTable() throws {
     var d = DataFrame(columns: [
       Column<String>(name:"description", capacity:0).eraseToAnyColumn(),
       Column<Bool>(name:"done", capacity:0).eraseToAnyColumn(),
@@ -171,7 +171,7 @@ final class SQLiteDataFrameTests: XCTestCase {
       Column<CGPoint>(name:"points", capacity:0).eraseToAnyColumn(),
       Column<IntThing>(name:"thing", capacity:0).eraseToAnyColumn()
     ])
-    try d2.readSQL(connection:db, table:"newTable")
+    try d2.appendSQL(connection:db, table:"newTable")
     XCTAssertEqual(d.shape.rows, d2.shape.rows)
     XCTAssertEqual(d.shape.columns, d2.shape.columns)
     XCTAssertEqual(d, d2)
