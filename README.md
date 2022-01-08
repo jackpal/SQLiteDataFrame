@@ -10,11 +10,11 @@ struct to read the contents of a SQLite prepared statement into a DataFrame.
    import SQLiteDataFrame
    import TabularData
    
-   // Create some SQL data.
-   var db: OpaquePointer!
+   // Create a sql table for demo purposes.
+   var db: SQLiteConnection!
    defer { sqlite3_close(db) }
    try checkSQLite(sqlite3_open(":memory:", &db))
-   try checkSQLite(sqlite3_exec(db, """
+   try db.exec("""
      create table tasks (
        description text not null,
        done bool default false not null,
@@ -23,13 +23,11 @@ struct to read the contents of a SQLite prepared statement into a DataFrame.
      insert into tasks (description) values ('Walk dog');
      insert into tasks (description) values ('Drink milk');
      insert into tasks (description) values ('Write code');
-""", nil, nil, nil))
+""")
 
    // Create a DataFrame from the results of the select statement.
    
    let dataFrame = try DataFrame(connection: db, statement:"select rowid, description, done, date from tasks order by rowid;")
-   
-   // Print the dataFrame, just for fun
    print(dataFrame)
    
    // Prints:
@@ -46,8 +44,11 @@ struct to read the contents of a SQLite prepared statement into a DataFrame.
 
 ## Features
 
-- Creates TabularData DataFrames from SQL.
-- Writes TabularData DataFrames to SQL.
+- Creates TabularData DataFrames from SQL databases.
+  - Complete control over how data is read.
+- Writes TabularData DataFrames to SQL databases.
+  - Complete control over how data is written.
+  - Can be used to insert, update, or delete rows in existing SQL tables in addition to creating or replacing whole tables.
 - Uses the low level Sqlite3 API. Should be compatible with any sqlite wrapper library.
 - Works with:
   - A whole table.
@@ -56,10 +57,10 @@ struct to read the contents of a SQLite prepared statement into a DataFrame.
 
 ## Details of Type mapping
 
-- DataFrames do not support the concept of non-nullable types. Non-nullable sqlite columns will be represented in the DataFrame using nullable columns.
+- DataFrames do not support the concept of non-nullable types. Non-nullable sqlite columns are represented in the DataFrame using nullable columns.
 
-When creating a DataFrame, the DataFrame column types are automatically determined
-  based on the SQLite column declarations.
+When creating a DataFrame, the DataFrame column types are automatically created
+based on the SQLite column declarations. The default algorithm:
   - Recognizes the standard SQL column types using the [Affinity Rules](https://www.sqlite.org/datatype3.html):
     - Int
     - Double
@@ -71,4 +72,3 @@ When creating a DataFrame, the DataFrame column types are automatically determin
   - Columns whose types can't be determined are given type Any
   - You can manually override the default types by using the "types:" parameter.
   - You can control the encode/decode of a type by implementing the SQLiteEncodable / SQLiteDecodable protocols.
-
