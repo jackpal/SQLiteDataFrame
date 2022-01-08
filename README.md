@@ -7,13 +7,14 @@ struct to read the contents of a SQLite prepared statement into a DataFrame.
 ## Usage
 
 ```swift
-   // Error checking omitted for brevity.
+   import SQLiteDataFrame
+   import TabularData
    
    // Create some SQL data.
    var db: OpaquePointer!
-   _ = sqlite3_open(":memory:", &db)
    defer { sqlite3_close(db) }
-   try check(sqlite3_exec(db, """
+   try checkSQLite(sqlite3_open(":memory:", &db))
+   try checkSQLite(sqlite3_exec(db, """
      create table tasks (
        description text not null,
        done bool default false not null,
@@ -45,13 +46,20 @@ struct to read the contents of a SQLite prepared statement into a DataFrame.
 
 ## Features
 
-- Uses with the low level Sqlite3 API. Should be compatible with any sqlite wrapper library.
+- Creates TabularData DataFrames from SQL.
+- Writes TabularData DataFrames to SQL.
+- Uses the low level Sqlite3 API. Should be compatible with any sqlite wrapper library.
 - Works with:
-  - A whole table specified by database file and table name.
-  - A whole table specified by database connection and name.
-  - A SELECT statement specified by database connection and String.
-  - A select statement specified by a prepared sqlite3 statement.
-- Automatically determines the column types based on the SQLite column declarations.
+  - A whole table.
+  - A SQL statement specified by a String.
+  - A prepared sqlite3 statement.
+
+## Details of Type mapping
+
+- DataFrames do not support the concept of non-nullable types. Non-nullable sqlite columns will be represented in the DataFrame using nullable columns.
+
+When creating a DataFrame, the DataFrame column types are automatically determined
+  based on the SQLite column declarations.
   - Recognizes the standard SQL column types using the [Affinity Rules](https://www.sqlite.org/datatype3.html):
     - Int
     - Double
@@ -62,11 +70,5 @@ struct to read the contents of a SQLite prepared statement into a DataFrame.
     - Date
   - Columns whose types can't be determined are given type Any
   - You can manually override the default types by using the "types:" parameter.
+  - You can control the encode/decode of a type by implementing the SQLiteEncodable / SQLiteDecodable protocols.
 
-## Limitations
-
-- DataFrames do not support the concept of non-nullable types. Non-nullable sqlite columns will be represented in the DataFrame using nullable columns.
-
-## ToDo
-
-- Add helper methods for DataFrame-based CREATE TABLE, INSERT, UPDATE and DELETE.
