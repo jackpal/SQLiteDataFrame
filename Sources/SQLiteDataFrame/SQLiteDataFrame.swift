@@ -155,7 +155,7 @@ public enum SQLiteType {
   }
 }
 
-public extension DataFrame {
+extension DataFrame {
   /**
    Intializes a DataFrame from a given SQLite database file and table name.
    
@@ -197,7 +197,7 @@ public extension DataFrame {
    SQLite3 [Type Affinity](https://www.sqlite.org/datatype3.html) rules.
    If the column's type can't be determined, then the `.any` type is used.
    */
-  init(contentsOfSQLiteDatabaseFile sqliteDatabaseFile: URL, table: String, columns: [String]? = nil,
+  public init(contentsOfSQLiteDatabaseFile sqliteDatabaseFile: URL, table: String, columns: [String]? = nil,
        types: [String:SQLiteType]? = nil, capacity: Int = 0) throws {
     var db: OpaquePointer!
     _ = try sqliteDatabaseFile.withUnsafeFileSystemRepresentation{
@@ -246,7 +246,7 @@ public extension DataFrame {
    SQLite3 [Type Affinity](https://www.sqlite.org/datatype3.html) rules.
    If the column's type can't be determined, then the `.any` type is used.
    */
-  init(connection: OpaquePointer, table: String, columns: [String]? = nil,
+  public init(connection: OpaquePointer, table: String, columns: [String]? = nil,
        types: [String:SQLiteType]? = nil, capacity: Int = 0) throws {
     let columnText = columns?.joined(separator: ",") ?? "*"
     let statement = "SELECT \(columnText) FROM \(table);"
@@ -293,7 +293,7 @@ public extension DataFrame {
    SQLite3 [Type Affinity](https://www.sqlite.org/datatype3.html) rules.
    If the column's type can't be determined, then the `.any` type is used.
    */
-  init(
+  public init(
     connection: OpaquePointer,
     statement: String,
     columns: [String]? = nil,
@@ -347,7 +347,7 @@ public extension DataFrame {
    SQLite3 [Type Affinity](https://www.sqlite.org/datatype3.html) rules.
    If the               column's type can't be determined, then the `.any` type is used.
    */
-  init(statement: SQLiteStatement, columns: [String]? = nil,
+  public init(statement: SQLiteStatement, columns: [String]? = nil,
        types: [String:SQLiteType]? = nil, capacity: Int = 0, finalizeStatement: Bool = true) throws {
     defer {
       if finalizeStatement {
@@ -397,44 +397,44 @@ public extension DataFrame {
       }
     }
     self.init(columns: columns)
-    try appendSQL(statement: statement, finalizeStatement: false)
+    try readSQL(statement: statement, finalizeStatement: false)
   }
 
   /**
-   Append the contents of the given table to this DataFrame.
+   Read the contents of the given table into this DataFrame.
    - Parameter connection: the sqlite database connection..
    - Parameter table: the name of the table to read.
 
    Columns are matched by name.
    */
-  mutating func appendSQL(connection: SQLiteConnection, table: String) throws {
+  mutating func readSQL(connection: SQLiteConnection, table: String) throws {
     let columnText = columns.map(\.name).joined(separator: ",")
     let statement = "SELECT \(columnText) FROM \(table);"
-    try appendSQL(connection: connection, statement: statement)
+    try readSQL(connection: connection, statement: statement)
   }
 
   /**
-   Append the contents of the given table to this DataFrame.
+   Read the contents of the given table into this DataFrame.
    - Parameter connection: the sqlite database connection..
    - Parameter statement: the sqlite statement.
    
    Columns are matched ito statement parameters n DataFrame column order.
    */
-  mutating func appendSQL(connection: SQLiteConnection, statement: String) throws {
+  mutating func readSQL(connection: SQLiteConnection, statement: String) throws {
     var preparedStatement: SQLiteStatement!
     try checkSQLite(sqlite3_prepare_v2(connection, statement,-1,&preparedStatement,nil))
-    try appendSQL(statement: preparedStatement)
+    try readSQL(statement: preparedStatement)
   }
   
   /**
-   Append the contents of the given table to this DataFrame.
+   Read the contents of the given table into this DataFrame.
    
    - Parameter statement: the prepared statement.
    - Parameter finalizeStatement: If true, the prepared statement will be finalized after the read completes.
    
    Columns are matched ito statement parameters n DataFrame column order.
    */
-  mutating func appendSQL(statement: SQLiteStatement, finalizeStatement: Bool = true) throws {
+  mutating func readSQL(statement: SQLiteStatement, finalizeStatement: Bool = true) throws {
     defer {
       if finalizeStatement {
         sqlite3_finalize(statement)
@@ -582,7 +582,7 @@ public extension DataFrame {
    try tasks.writeSQL(statement: statement)
    ```
    */
-  func writeSQL(statement: SQLiteStatement, finalizeStatement: Bool = true) throws {
+  public func writeSQL(statement: SQLiteStatement, finalizeStatement: Bool = true) throws {
     defer {
       if finalizeStatement {
         sqlite3_finalize(statement)
@@ -701,7 +701,7 @@ public extension DataFrame {
     statement: "insert into tasks (description, done) values (?,?)")
   ```
 */
-  func writeSQL(connection: SQLiteConnection, statement: String) throws {
+  public func writeSQL(connection: SQLiteConnection, statement: String) throws {
     var preparedStatement: SQLiteStatement!
     try checkSQLite(sqlite3_prepare_v2(connection, statement,-1,&preparedStatement,nil))
     try writeSQL(statement:preparedStatement)
@@ -814,7 +814,7 @@ public extension DataFrame {
      statement: "insert into tasks (description, done) values (?,?)")
    ```
 */
-  func writeSQL(file: URL, statement: String) throws {
+  public func writeSQL(file: URL, statement: String) throws {
     var db: OpaquePointer!
     _ = try file.withUnsafeFileSystemRepresentation{
       try checkSQLite(sqlite3_open($0, &db))
@@ -848,7 +848,7 @@ public extension DataFrame {
   try tasks.writeSQL(file:fileURL, table: "tasks")
   ```
 */
-  func writeSQL(file: URL, table: String) throws {
+  public func writeSQL(file: URL, table: String) throws {
     var db: OpaquePointer!
     _ = try file.withUnsafeFileSystemRepresentation{
       try checkSQLite(sqlite3_open($0, &db))
