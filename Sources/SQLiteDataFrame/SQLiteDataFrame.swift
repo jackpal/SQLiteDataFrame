@@ -19,20 +19,57 @@ let kSQLiteDataFrameDomain = "SQLiteDataFrame"
 ///     try checkSQLite(sqlite3_open(":memory:", &db))
 /// ```
 ///
-/// The sqlite3 return code is returned as a discardable result. This is useful for
-/// functions like `sqlite3_step`:
-///
-/// ```
-///     let step_result = try checkSQLite(sqlite3_step(statement))
-///     if step_result == SQLITE_DONE {
-///               ...
-/// ```
+/// The sqlite3 return code is returned as a discardable result.
 @discardableResult
 func checkSQLite(_ code: Int32) throws -> Int32 {
   if code != SQLITE_OK && code != SQLITE_ROW && code != SQLITE_DONE {
     throw NSError(domain:kSQLiteDataFrameDomain, code:Int(code))
   }
   return code
+}
+
+extension SQLiteConnection {
+  /// Prepares a SQliteStatement from a String.
+  ///
+  /// The caller is responsible for finalizing the returned SQLiteStatement.
+  public func prepare(_ statement: String) throws -> SQLiteStatement {
+    var preparedStatement: SQLiteStatement!
+    try checkSQLite(sqlite3_prepare_v2(self, statement, -1, &preparedStatement, nil))
+    return preparedStatement
+  }
+  
+  /// Returns true if table exists.
+  public func exists(table: String) throws -> Bool {
+    let statement = try prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='\(table)'")
+    defer { statement.finalize() }
+    return try statement.step()
+  }
+  
+  /// Executes sql statements.
+  ///
+  /// Wrapper for sqlite3_exec
+  public func exec(_ statements: String) throws {
+    try checkSQLite(sqlite3_exec(self, statements, nil, nil, nil))
+  }
+}
+
+extension SQLiteStatement {
+  /// Returns true if this step has moved to a new row, false if there are no more rows.
+  ///
+  /// This is a wrapper for sqlite3_step.
+  public func step()throws -> Bool {
+    return try checkSQLite(sqlite3_step(self)) == SQLITE_ROW
+  }
+  
+  public func reset() throws {
+    try checkSQLite(sqlite3_reset(self))
+  }
+  
+  /// A wrapper for sqlite3_finalize.
+  public func finalize() {
+    // Ignore the error from sqlite3_finalize, it has already been reported by sqlite3_step.
+    sqlite3_finalize(self)
+  }
 }
 
 /// An enum that can hold any sqlite column value.
@@ -155,6 +192,18 @@ public enum SQLiteType {
   }
 }
 
+/// The policy to use if a table already exists.
+enum IfTableExistsPolicy {
+  /// Throw an error.
+  case fail
+  /// Do nothing. (Leaves the old table.)
+  case doNothing
+  /// Drops the old table, then writes new table.
+  case replace
+  /// Appends to old table.
+  case append
+}
+
 extension DataFrame {
   /**
    Intializes a DataFrame from a given SQLite table name.
@@ -175,10 +224,10 @@ extension DataFrame {
    ```
    // Error checking omitted for brevity.
    
-   var db: OpaquePointer!
+   var db: SQLiteConnection!
    _ = sqlite3_open(":memory:", &db)
    defer { sqlite3_close(db) }
-   try check(sqlite3_exec(db, """
+   try connection.exec("""
      create table tasks (
        description text not null,
        done bool default false not null
@@ -186,7 +235,7 @@ extension DataFrame {
      insert into tasks (description) values ('Walk dog');
      insert into tasks (description) values ('Drink milk');
      insert into tasks (description) values ('Write code');
-""", nil, nil, nil))
+""")
    
    let dataFrame = try DataFrame(connection: db, table:"tasks")
    ```
@@ -222,7 +271,7 @@ extension DataFrame {
    ```
    // Error checking omitted for brevity.
    
-   var db: OpaquePointer!
+   var db: SQLConnection!
    _ = sqlite3_open(":memory:", &db)
    defer { sqlite3_close(db) }
    try check(sqlite3_exec(db, """
@@ -249,8 +298,7 @@ extension DataFrame {
     types: [String:SQLiteType]? = nil,
     capacity: Int = 0
   ) throws {
-    var preparedStatement: SQLiteStatement!
-    try checkSQLite(sqlite3_prepare_v2(connection, statement, -1, &preparedStatement, nil))
+    let preparedStatement = try connection.prepare(statement)
     try self.init(statement:preparedStatement, columns:columns, types:types, capacity:capacity)
   }
   
@@ -285,9 +333,7 @@ extension DataFrame {
      insert into tasks (description) values ('Drink milk');
      insert into tasks (description) values ('Write code');
 """, nil, nil, nil)
-   var statement: SQLiteStatement!
-   _ = sqlite3_prepare_v2(db,
-       "select rowid, description, done from tasks order by rowid;",-1,&statement,nil)
+   let preparedStatement = try connection.prepare("select rowid, description, done from tasks order by rowid")
    
    let dataFrame = try DataFrame(statement:statement)
    ```
@@ -300,7 +346,7 @@ extension DataFrame {
        types: [String:SQLiteType]? = nil, capacity: Int = 0, finalizeStatement: Bool = true) throws {
     defer {
       if finalizeStatement {
-        sqlite3_finalize(statement)
+        statement.finalize()
       }
     }
     
@@ -370,8 +416,7 @@ extension DataFrame {
    Columns are matched ito statement parameters n DataFrame column order.
    */
   mutating func readSQL(connection: SQLiteConnection, statement: String) throws {
-    var preparedStatement: SQLiteStatement!
-    try checkSQLite(sqlite3_prepare_v2(connection, statement,-1,&preparedStatement,nil))
+    let preparedStatement = try connection.prepare(statement)
     try readSQL(statement: preparedStatement)
   }
   
@@ -386,20 +431,12 @@ extension DataFrame {
   mutating func readSQL(statement: SQLiteStatement, finalizeStatement: Bool = true) throws {
     defer {
       if finalizeStatement {
-        sqlite3_finalize(statement)
+        statement.finalize()
       }
     }
     
     var rowIndex = 0
-    while true {
-      let rc = sqlite3_step(statement)
-      if rc == SQLITE_DONE {
-          break
-      }
-      if rc != SQLITE_ROW {
-        throw NSError(domain: kSQLiteDataFrameDomain, code: -2, userInfo:["rc": NSNumber(value: rc),
-                                                           "row": NSNumber(value: rowIndex)])
-      }
+    while try statement.step() {
       self.appendEmptyRow()
       for (col, column) in columns.enumerated() {
         let columnIndex = Int32(col)
@@ -534,7 +571,7 @@ extension DataFrame {
   public func writeSQL(statement: SQLiteStatement, finalizeStatement: Bool = true) throws {
     defer {
       if finalizeStatement {
-        sqlite3_finalize(statement)
+        statement.finalize()
       }
     }
     let columns = columns.prefix(Int(sqlite3_bind_parameter_count(statement)))
@@ -547,12 +584,8 @@ extension DataFrame {
         }
         try DataFrame.writeItem(statement:statement, positionalIndex:positionalIndex, item:item)
       }
-      let rc = sqlite3_step(statement)
-      if rc != SQLITE_DONE {
-        throw NSError(domain: kSQLiteDataFrameDomain, code: -2, userInfo:["rc": NSNumber(value: rc),
-                                                           "row": NSNumber(value: rowIndex)])
-      }
-      try checkSQLite(sqlite3_reset(statement))
+      _ = try statement.step()
+      try statement.reset()
     }
   }
   
@@ -684,39 +717,58 @@ extension DataFrame {
   try tasks.writeSQL(connection:db, table: "tasks")
   ```
 */
-  func writeSQL(connection: OpaquePointer, table: String) throws {
-    // Drop the table if it exists
-    try checkSQLite(sqlite3_exec(connection, "drop table if exists \(table)", nil, nil, nil))
-    let columnDefs = columns.map {column -> String in
-      let name = column.name
-      var sqlType: String?
-      switch column.wrappedElementType {
-      case is String.Type:
-        sqlType = "TEXT"
-      case is Bool.Type:
-        sqlType = "BOOLEAN"
-      case is Int8.Type, is Int16.Type, is Int32.Type, is Int64.Type, is Int.Type,
-        is UInt8.Type, is UInt16.Type, is UInt32.Type, is UInt64.Type, is UInt.Type:
-        sqlType = "INT"
-      case is Float.Type:
-        sqlType = "FLOAT"
-      case is Double.Type:
-        sqlType = "DOUBLE"
-      case is Date.Type:
-        sqlType = "DATE"
-      case is Data.Type:
-        sqlType = "BLOB"
-      default:
-        break
+  func writeSQL(connection: SQLiteConnection, table: String, ifExists: IfTableExistsPolicy = .fail) throws {
+    let tableExists = try connection.exists(table: table)
+    var createTable : Bool = true
+    switch ifExists {
+    case .fail:
+      if tableExists {
+        throw NSError(domain:kSQLiteDataFrameDomain, code:-10)
       }
-      if let sqlType = sqlType {
-        return "\(name) \(sqlType)"
+    case .doNothing:
+      if tableExists {
+        return
       }
-      return name
+    case .replace:
+      try connection.exec("drop table \(table)")
+
+    case .append:
+      createTable = !tableExists
+      break
     }
-    let columnSpec = columnDefs.joined(separator: ",")
-    let create = "create table \(table) (\(columnSpec))"
-    try checkSQLite(sqlite3_exec(connection, create, nil, nil, nil))
+    
+    if createTable {
+      let columnDefs = columns.map {column -> String in
+        let name = column.name
+        var sqlType: String?
+        switch column.wrappedElementType {
+        case is String.Type:
+          sqlType = "TEXT"
+        case is Bool.Type:
+          sqlType = "BOOLEAN"
+        case is Int8.Type, is Int16.Type, is Int32.Type, is Int64.Type, is Int.Type,
+          is UInt8.Type, is UInt16.Type, is UInt32.Type, is UInt64.Type, is UInt.Type:
+          sqlType = "INT"
+        case is Float.Type:
+          sqlType = "FLOAT"
+        case is Double.Type:
+          sqlType = "DOUBLE"
+        case is Date.Type:
+          sqlType = "DATE"
+        case is Data.Type:
+          sqlType = "BLOB"
+        default:
+          break
+        }
+        if let sqlType = sqlType {
+          return "\(name) \(sqlType)"
+        }
+        return name
+      }
+      let columnSpec = columnDefs.joined(separator: ",")
+      try connection.exec("create table \(table) (\(columnSpec))")
+    }
+    
     let questionMarks = Array(repeating:"?", count:shape.columns).joined(separator: ",")
     let statement = "insert into \(table) values (\(questionMarks))"
     try writeSQL(connection:connection, statement: statement)

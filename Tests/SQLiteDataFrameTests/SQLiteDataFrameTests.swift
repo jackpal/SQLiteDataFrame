@@ -121,15 +121,57 @@ final class SQLiteDataFrameTests: XCTestCase {
     d.append(row: "Pick up drycleaning", false, Int8(3), CGPoint(x: 1.0, y: 1.0), IntThing(a: 1))
     d.append(row: "Rake leaves", false, Int8(3), CGPoint(x: 2.0, y: 2.0), IntThing(a: 2))
     try d.writeSQL(connection:db, table: "newTable")
-    // Test writing twice is OK
-    d.append(row: "Watch TV", false, Int8(3), CGPoint(x: 2.0, y: 2.0), IntThing(a: 3))
-    d.appendEmptyRow()
-    try d.writeSQL(connection:db, table: "newTable")
     let newTable = try DataFrame(connection:db, table:"newTable")
     print(newTable)
-    XCTAssertEqual(newTable.shape.rows, 4)
+    XCTAssertEqual(newTable.shape.rows, 2)
   }
   
+  func testWriteSQLTableThatExistsWithFailPolicy() throws {
+    let d = DataFrame(columns: [
+      Column<String>(name:"description", capacity:0).eraseToAnyColumn(),
+    ])
+    try d.writeSQL(connection:db, table: "newTable")
+    XCTAssertThrowsError(try d.writeSQL(connection:db, table: "newTable", ifExists: .fail))
+  }
+  
+  func testWriteSQLTableThatExistsWithDoNothingPolicy() throws {
+    var d = DataFrame(columns: [
+      Column<String>(name:"description", capacity:0).eraseToAnyColumn(),
+    ])
+    d.append(row: "Rake leaves")
+    try d.writeSQL(connection:db, table: "newTable")
+    d.append(row: "Drink milk")
+    try d.writeSQL(connection:db, table: "newTable", ifExists: .doNothing)
+    let copy = try DataFrame(connection: db, table: "newTable")
+    XCTAssertEqual(copy.shape.rows, 1)
+  }
+  
+  func testWriteSQLTableThatExistsWithDoReplacePolicy() throws {
+    var d = DataFrame(columns: [
+      Column<String>(name:"description", capacity:0).eraseToAnyColumn(),
+    ])
+    d.append(row: "Rake leaves")
+    try d.writeSQL(connection:db, table: "newTable")
+    d.append(row: "Drink milk")
+    try d.writeSQL(connection:db, table: "newTable", ifExists: .replace)
+    let copy = try DataFrame(connection: db, table: "newTable")
+    XCTAssertEqual(copy.shape.rows, 2)
+  }
+  
+  func testWriteSQLTableThatExistsWithAppendPolicy() throws {
+    var d = DataFrame(columns: [
+      Column<String>(name:"description", capacity:0).eraseToAnyColumn(),
+    ])
+    d.append(row: "Rake leaves")
+    try d.writeSQL(connection:db, table: "newTable")
+    // Test writing twice does nothing
+    d.append(row: "Drink milk")
+    try d.writeSQL(connection:db, table: "newTable", ifExists: .append)
+    let copy = try DataFrame(connection: db, table: "newTable")
+    XCTAssertEqual(copy.shape.rows, 3)
+  }
+
+
   func testReadSQLTable() throws {
     var d = DataFrame(columns: [
       Column<String>(name:"description", capacity:0).eraseToAnyColumn(),
