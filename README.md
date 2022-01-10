@@ -2,7 +2,7 @@
 
 Extends the [Tablular Data](https://developer.apple.com/documentation/tabulardata)
 [DataFrame](https://developer.apple.com/documentation/tabulardata/dataframe)
-struct to read the contents of a SQLite prepared statement into a DataFrame.
+struct to read and write to [SQLite](https://sqlite.org/index.html) databases.
 
 ## Usage
 
