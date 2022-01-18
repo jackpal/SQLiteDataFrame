@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import SQLite3
 import TabularData
